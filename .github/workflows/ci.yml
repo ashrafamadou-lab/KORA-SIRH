@@ -1,9 +1,10 @@
-# CI KORA — socle de données.
-# Chaque run produit des artefacts d'exécution téléchargeables : version PostgreSQL,
-# SHA du commit, ledger des migrations, rapport de seed et résultats de tests.
-# NOTE : rédigée hors GitHub (sandbox sans accès réseau) puis REJOUÉE À L'IDENTIQUE sur
-# un cluster PostgreSQL 16 vierge le 01/08/2026 (voir docs/adr/ADR-002 et le journal de
-# Phase 1) — à confirmer sur GitHub au premier push.
+# CI KORA — trois jobs :
+#   db-socle : migrations + seed + tests SQL (psql pur) + artefacts d'exécution
+#   core     : domaine pur @kora/core (node:test, zéro dépendance)
+#   api      : build NestJS/Prisma + e2e auth contre PostgreSQL réel
+# Validée sur GitHub le 01/08/2026 (job db-socle, run vert + artefacts) ; les jobs core
+# et api sont ajoutés par l'incrément 2 — le sandbox de développement n'ayant pas accès
+# au registre npm, cette CI est leur banc de preuve (ADR-003).
 name: CI
 on:
   push:
@@ -34,7 +35,7 @@ jobs:
       DATABASE_URL_SUPER: postgres://postgres:postgres@127.0.0.1:5432/kora
       PGPASSWORD: postgres
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Préparer le dossier d'artefacts
         run: mkdir -p ci-artifacts
@@ -56,7 +57,7 @@ jobs:
       - name: Seed (sans intervention manuelle)
         run: bash infra/db/seed.sh 2>&1 | tee ci-artifacts/03-seed.log
 
-      - name: Tests du socle (RLS, contraintes, audit, paramètres, falsification)
+      - name: Tests du socle (RLS, contraintes, audit, paramètres, falsification, sessions)
         run: bash infra/db/tests/run_tests.sh 2>&1 | tee ci-artifacts/04-tests.log
 
       - name: Métadonnées d'exécution (toujours générées)
@@ -76,8 +77,66 @@ jobs:
 
       - name: Publier les artefacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: kora-ci-artefacts-${{ github.sha }}
           path: ci-artifacts/
           if-no-files-found: error
+
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - name: Tests du domaine pur (@kora/core — zéro dépendance)
+        run: cd packages/core && node --test src/*.test.ts
+
+  api:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL_MIGRATOR: postgres://kora_migrator:kora_migrator_dev@127.0.0.1:5432/kora
+      DATABASE_URL_APP: postgres://kora_app:kora_app_dev@127.0.0.1:5432/kora
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Créer les rôles et la base
+        run: |
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE kora_migrator LOGIN PASSWORD 'kora_migrator_dev'" \
+            -c "CREATE ROLE kora_app LOGIN PASSWORD 'kora_app_dev' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS" \
+            -c "CREATE DATABASE kora OWNER kora_migrator"
+
+      - name: Migrations
+        run: bash infra/db/migrate.sh
+
+      - name: Dépendances API
+        # npm install (pas ci) : le lockfile sera généré et committé depuis un poste avec
+        # accès registre — suivi dans le journal de Phase 1.
+        run: cd apps/api && npm install --no-audit --no-fund
+
+      - name: Client Prisma
+        run: cd apps/api && npx prisma generate
+
+      - name: Build TypeScript strict
+        run: cd apps/api && npm run build
+
+      - name: E2E auth (login, sessions, verrouillage, audit)
+        run: cd apps/api && npm test

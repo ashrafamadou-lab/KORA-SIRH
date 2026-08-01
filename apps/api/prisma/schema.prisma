@@ -1,0 +1,47 @@
+// Prisma en mode introspection-first (ADR-003) : la vérité du schéma est dans
+// infra/db/migrations/*.sql — ce fichier n'en mappe que la partie consommée par l'API.
+// Le client se connecte avec le rôle kora_app (NOBYPASSRLS) ; tout accès aux données
+// tenant passe par PrismaService.withTenant() qui pose app.tenant_id via set_config.
+// Volontairement sans relations ni colonne citext (users est accédé en SQL brut typé).
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["multiSchema"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL_APP")
+  schemas  = ["admin"]
+}
+
+model Tenant {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  slug        String    @unique
+  name        String
+  countryCode String    @default("BJ") @map("country_code") @db.Char(2)
+  isDemo      Boolean   @default(false) @map("is_demo")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  @@map("tenants")
+  @@schema("admin")
+}
+
+model Session {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String    @map("tenant_id") @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  tokenHash  String    @unique @map("token_hash")
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  lastSeenAt DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz(6)
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt  DateTime? @map("revoked_at") @db.Timestamptz(6)
+  ip         String?   @db.Inet
+  userAgent  String?   @map("user_agent")
+
+  @@index([tenantId, userId, createdAt(sort: Desc)], map: "sessions_user_idx")
+  @@map("sessions")
+  @@schema("admin")
+}

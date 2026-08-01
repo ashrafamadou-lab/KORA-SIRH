@@ -8,25 +8,30 @@ pas contresigné.
 
 ## État du repo — honnêteté d'abord
 
-**Incrément 1 (Phase 1) : socle de données — LIVRÉ ET TESTÉ.**
+**Incrément 1 : socle de données — livré, testé, CI GitHub validée (run vert du 01/08/2026, artefacts publiés).**
+**Incrément 2 (en cours) : auth E1 — domaine pur testé localement ; tranche API à prouver par la CI au prochain push.**
 
 | Composant | État |
 |---|---|
-| Migrations SQL-first + runner à ledger (checksums) | ✅ Testé (rejeu idempotent) |
+| Migrations SQL-first + runner à ledger (checksums) | ✅ Testé (rejeu idempotent, ×2 env. vierge + CI GitHub) |
 | Multi-tenant RLS (D1/D2) : isolation lecture/écriture, rôle app NOBYPASSRLS | ✅ Testé (`10_…`) |
 | Historisation salariale anti-chevauchement, unicités par tenant, FK composites | ✅ Testé (`20_…`) |
 | Audit trail append-only à hash chaîné + détection de falsification | ✅ Testé (`30_…`, `50_…`) |
 | Parameter Engine : versions datées, statuts, résolution à la date de l'événement | ✅ Testé (`40_…`) |
 | Seed : 16 rôles, 2 tenants DEMO, 18 paramètres Bénin **en draft** (contreseing requis) | ✅ Appliqué |
-| Application NestJS (auth, RBAC service, workflow, notifications, API/OpenAPI) | ⛔ NOT IMPLEMENTED — incréments 2+ |
-| Frontend PWA | ⛔ NOT IMPLEMENTED — Phase 2/3 |
-| CI GitHub Actions | ⚠ Rédigée, à valider au premier push |
+| Auth — schéma (sessions, verrouillage, resolve_tenant) — migration 0007 | ✅ Testé (`60_…`) |
+| `@kora/core` — domaine pur : TOTP (vecteurs RFC 6238), politique mdp, verrouillage progressif, jetons de session, RBAC anti-élévation | ✅ 19 tests node:test verts (zéro dépendance) |
+| `@kora/api` — NestJS + Prisma (RLS par set_config), login/me/logout, lockout, audit | ⚠ Écrit + e2e fournis — **preuve = job CI `api` au prochain push** |
+| MFA TOTP côté API (enrôlement/vérification), RBAC guard sur endpoints métier, OpenAPI | ⛔ NOT IMPLEMENTED — suite de l'incrément 2 |
+| Workflow/Notification engines (services), Frontend PWA | ⛔ NOT IMPLEMENTED — incréments suivants / Phase 2-3 |
+| CI GitHub Actions | ✅ `db-socle` validé sur GitHub ; jobs `core` et `api` ajoutés (actions v6/v7) |
+| Lockfile npm (`package-lock.json`) | ⚠ À générer/committer depuis un poste avec accès registre (la CI utilise `npm install`) |
 
 ## Structure
 
 ```text
-apps/        (vide) applications — api NestJS et web PWA aux incréments suivants
-packages/    (vide) types et validations partagés
+apps/api/    API NestJS : Prisma (rôle kora_app, withTenant/set_config), auth E1, e2e node:test
+packages/core/  domaine pur zéro dépendance (TOTP, mdp, lockout, jetons, RBAC) + tests
 infra/
   docker-compose.yml       Postgres 16 + Redis + MinIO + Mailpit (dev)
   db/
