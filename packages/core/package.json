@@ -1,0 +1,14 @@
+{
+  "name": "@kora/core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "KORA — domaine pur (zéro dépendance) : TOTP, politique de mots de passe, verrouillage progressif, jetons de session, résolution RBAC. Testé avec node:test (type stripping natif, Node ≥ 22.18).",
+  "type": "module",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "test": "node --test src/*.test.ts"
+  }
+}
