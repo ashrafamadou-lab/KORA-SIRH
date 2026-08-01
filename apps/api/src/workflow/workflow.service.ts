@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
 import { auditAuth } from '../auth/audit.util';
+import { NotificationService } from '../notify/notification.service';
 import {
   resolveTransition,
   type WorkflowAction,
@@ -56,6 +57,7 @@ interface InstanceRow {
   created_by: string;
   subject_type: string;
   subject_id: string;
+  definition_key: string;
 }
 
 /**
@@ -67,7 +69,10 @@ interface InstanceRow {
  */
 @Injectable()
 export class WorkflowService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notify: NotificationService,
+  ) {}
 
   // ---------- Définitions ----------
 
@@ -158,6 +163,12 @@ export class WorkflowService {
         action: 'submit', fromStatus: null, toStatus: 'pending', stepIndex: firstIndex, actorUserId,
       });
       await this.syncSubject(tx, input.subjectType, input.subjectId, 'pending');
+      // E5 : notification aux approbateurs de la première étape (même transaction).
+      await this.notify.notifyWorkflowEventTx(tx, tenantId, {
+        kind: 'step_pending', instanceId, transitionSeq: 1, requesterId: actorUserId,
+        definitionKey: input.definitionKey, subjectType: input.subjectType, subjectId: input.subjectId,
+        step: def.steps[firstIndex] ?? null, context,
+      });
       await auditAuth(tx, tenantId, {
         action: 'workflow_submitted', actorUserId, recordId: instanceId,
         reason: `${input.definitionKey}`, module: 'workflow',
@@ -234,6 +245,21 @@ export class WorkflowService {
       if (transition.nextStatus === 'approved') await this.syncSubject(tx, inst.subject_type, inst.subject_id, 'approved');
       if (transition.nextStatus === 'rejected') await this.syncSubject(tx, inst.subject_type, inst.subject_id, 'rejected');
 
+      // E5 : décision finale → notifier le DEMANDEUR ; étape suivante → notifier ses APPROBATEURS.
+      if (transition.nextStatus === 'approved' || transition.nextStatus === 'rejected' || transition.nextStatus === 'returned') {
+        await this.notify.notifyWorkflowEventTx(tx, tenantId, {
+          kind: transition.nextStatus, instanceId, transitionSeq: seq, requesterId: inst.created_by,
+          definitionKey: inst.definition_key, subjectType: inst.subject_type, subjectId: inst.subject_id,
+          step: inst.steps_snapshot[inst.current_step_index] ?? null, context: inst.context,
+        });
+      } else if (transition.advancesStep) {
+        await this.notify.notifyWorkflowEventTx(tx, tenantId, {
+          kind: 'step_pending', instanceId, transitionSeq: seq, requesterId: inst.created_by,
+          definitionKey: inst.definition_key, subjectType: inst.subject_type, subjectId: inst.subject_id,
+          step: inst.steps_snapshot[finalIndex] ?? null, context: inst.context,
+        });
+      }
+
       await auditAuth(tx, tenantId, {
         action: `workflow_${action}`, actorUserId: actor.userId, recordId: instanceId,
         reason: transition.nextStatus, module: 'workflow',
@@ -276,6 +302,11 @@ export class WorkflowService {
         stepIndex: inst.current_step_index, actorUserId: actor.userId, comment: opts.comment,
       });
       await this.syncSubject(tx, inst.subject_type, inst.subject_id, 'cancelled');
+      await this.notify.notifyWorkflowEventTx(tx, tenantId, {
+        kind: 'cancelled', instanceId, transitionSeq: seq, requesterId: inst.created_by,
+        definitionKey: inst.definition_key, subjectType: inst.subject_type, subjectId: inst.subject_id,
+        step: inst.steps_snapshot[inst.current_step_index] ?? null, context: inst.context,
+      });
       await auditAuth(tx, tenantId, { action: 'workflow_cancel', actorUserId: actor.userId, recordId: instanceId, module: 'workflow' });
       const result: ActOutcome = { kind: 'ok', status: 'cancelled', currentStepIndex: null, transitionSeq: seq };
       await this.recordIdempotency(tx, tenantId, instanceId, opts.idempotencyKey, seq, result);
@@ -309,6 +340,11 @@ export class WorkflowService {
         action: 'delegate', fromStatus: 'pending', toStatus: 'pending',
         stepIndex: inst.current_step_index, actorUserId: actor.userId, onBehalfOf: toUserId, comment: opts.comment,
       });
+      await this.notify.notifyWorkflowEventTx(tx, tenantId, {
+        kind: 'delegated', instanceId, transitionSeq: seq, requesterId: inst.created_by,
+        definitionKey: inst.definition_key, subjectType: inst.subject_type, subjectId: inst.subject_id,
+        step, context: inst.context, delegateUserId: toUserId,
+      });
       await auditAuth(tx, tenantId, {
         action: 'workflow_delegate', actorUserId: actor.userId, recordId: instanceId,
         reason: `to=${toUserId}`, module: 'workflow',
@@ -324,8 +360,12 @@ export class WorkflowService {
    */
   async tick(tenantId: string): Promise<{ reminded: number; escalated: number }> {
     return this.prisma.withTenant(tenantId, async (tx) => {
-      const due = await tx.$queryRaw<Array<{ id: string; current_step_index: number; steps_snapshot: WorkflowStepDef[] }>>`
-        SELECT id, current_step_index, steps_snapshot
+      const due = await tx.$queryRaw<Array<{
+        id: string; current_step_index: number; steps_snapshot: WorkflowStepDef[];
+        created_by: string; context: WorkflowContext; subject_type: string; subject_id: string;
+        definition_key: string;
+      }>>`
+        SELECT id, current_step_index, steps_snapshot, created_by, context, subject_type, subject_id, definition_key
           FROM workflow.instances
          WHERE status = 'pending' AND step_deadline IS NOT NULL AND step_deadline <= now()
          FOR UPDATE SKIP LOCKED`;
@@ -339,6 +379,12 @@ export class WorkflowService {
         await tx.$executeRaw`
           UPDATE workflow.instances SET escalated_at = now(), revision = revision + 1
            WHERE id = ${row.id}::uuid`;
+        // E5 : notifier les acteurs d'escalade de l'étape + le demandeur.
+        await this.notify.notifyWorkflowEventTx(tx, tenantId, {
+          kind: 'escalated', instanceId: row.id, transitionSeq: seq, requesterId: row.created_by,
+          definitionKey: row.definition_key, subjectType: row.subject_type, subjectId: row.subject_id,
+          step: row.steps_snapshot[row.current_step_index] ?? null, context: row.context,
+        });
         await auditAuth(tx, tenantId, { action: 'workflow_escalate', recordId: row.id, reason: 'sla_breach', module: 'workflow' });
         escalated++;
       }
@@ -377,7 +423,7 @@ export class WorkflowService {
   private async lockInstance(tx: Prisma.TransactionClient, instanceId: string): Promise<InstanceRow | null> {
     const rows = await tx.$queryRaw<InstanceRow[]>`
       SELECT id, status, current_step_index, steps_snapshot, context, revision,
-             delegated_to_user_id, created_by, subject_type, subject_id
+             delegated_to_user_id, created_by, subject_type, subject_id, definition_key
         FROM workflow.instances WHERE id = ${instanceId}::uuid FOR UPDATE`;
     return rows[0] ?? null;
   }

@@ -468,6 +468,150 @@ export const OPENAPI_SPEC = {
         responses: { '200': { description: 'candidateValue + currentlyApplicableAtThatDate' }, '404': err('Introuvable') },
       },
     },
+    '/notifications': {
+      get: {
+        summary: 'Mes notifications (in-app) — toujours bornées à l’utilisateur de la session',
+        security: bearer,
+        parameters: [
+          { name: 'unread', in: 'query', required: false, schema: { type: 'string', enum: ['1', 'true'] }, description: 'non lues uniquement' },
+          { name: 'includeArchived', in: 'query', required: false, schema: { type: 'string', enum: ['1', 'true'] } },
+          { name: 'limit', in: 'query', required: false, schema: { type: 'integer', maximum: 200 } },
+          { name: 'offset', in: 'query', required: false, schema: { type: 'integer' } },
+        ],
+        responses: { '200': { description: '{ items[], unreadCount } — contenu rendu (langue du destinataire)' } },
+      },
+    },
+    '/notifications/{id}': {
+      get: {
+        summary: 'Une de MES notifications (celle d’un autre utilisateur : 404, jamais révélée)',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: 'Notification + livraisons par canal' }, '404': err('Introuvable (ou pas la vôtre)') },
+      },
+    },
+    '/notifications/{id}/read': {
+      post: {
+        summary: 'Marquer comme lue (idempotent)',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ read: true }' }, '404': err('Introuvable (ou pas la vôtre)') },
+      },
+    },
+    '/notifications/{id}/archive': {
+      post: {
+        summary: 'Archiver (marque aussi comme lue, idempotent)',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ archived: true }' }, '404': err('Introuvable (ou pas la vôtre)') },
+      },
+    },
+    '/notifications/preferences': {
+      get: {
+        summary: 'Mes préférences de notification (langue + canaux sortants)',
+        security: bearer,
+        responses: { '200': { description: '{ locale, channels: { email, sms, push } } — in_app non désactivable (socle)' } },
+      },
+      put: {
+        summary: 'Régler langue (fr/en) et canaux sortants — les notifications OBLIGATOIRES ignorent ces préférences',
+        security: bearer,
+        requestBody: {
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  locale: { type: 'string', enum: ['fr', 'en'] },
+                  channels: {
+                    type: 'object',
+                    properties: { email: { type: 'boolean' }, sms: { type: 'boolean' }, push: { type: 'boolean' } },
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: { '200': { description: 'Préférences effectives' }, '400': err('Canal inconnu ou non désactivable (in_app)') },
+      },
+    },
+    '/admin/notify/templates': {
+      post: {
+        summary: 'Créer un modèle (draft, bilingue FR/EN, variables contrôlées) — notify.manage, audité',
+        security: bearer,
+        requestBody: {
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['key', 'name', 'subjectFr', 'subjectEn', 'bodyFr', 'bodyEn'],
+                properties: {
+                  key: { type: 'string', maxLength: 100 },
+                  name: { type: 'string', maxLength: 200 },
+                  subjectFr: { type: 'string', maxLength: 200 },
+                  subjectEn: { type: 'string', maxLength: 200 },
+                  bodyFr: { type: 'string', maxLength: 4000 },
+                  bodyEn: { type: 'string', maxLength: 4000 },
+                  variables: { type: 'array', items: { type: 'string' }, description: 'liste fermée — noms de secrets/médicaux interdits' },
+                  channels: { type: 'array', items: { type: 'string', enum: ['in_app', 'email', 'sms', 'push'] }, description: 'in_app obligatoire (socle)' },
+                  mandatory: { type: 'boolean', description: 'non désactivable par préférence utilisateur' },
+                },
+              },
+            },
+          },
+        },
+        responses: { '201': { description: '{ id, version } — version auto-incrémentée par clé' }, '400': err('Modèle invalide (placeholder hors liste, nom interdit, secret embarqué…)'), '403': err('Permission absente') },
+      },
+      get: { summary: 'Lister les modèles (toutes versions) — notify.manage', security: bearer, responses: { '200': { description: 'Modèles du tenant uniquement' } } },
+    },
+    '/admin/notify/templates/{id}': {
+      get: { summary: 'Consulter un modèle — notify.manage', security: bearer, parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Modèle complet' }, '404': err('Introuvable') } },
+      patch: { summary: 'Modifier un DRAFT (un modèle sorti de draft est figé) — notify.manage, audité', security: bearer, parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Draft mis à jour' }, '400': err('Invalide ou non draft'), '404': err('Introuvable') } },
+    },
+    '/admin/notify/templates/{id}/activate': {
+      post: { summary: 'Activer un draft (supersède l’active précédente de la même clé) — notify.manage, audité', security: bearer, parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Activé' }, '400': err('Non draft'), '404': err('Introuvable') } },
+    },
+    '/admin/notify/templates/{id}/retire': {
+      post: { summary: 'Retirer un modèle — notify.manage, audité', security: bearer, parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Retiré' }, '404': err('Introuvable ou déjà retiré') } },
+    },
+    '/admin/notify/events': {
+      post: {
+        summary: 'Publier un événement métier (idempotent par eventKey) — notify.manage, audité via l’événement',
+        description:
+          'Destinataires par userId, roleKey ou portée organisationnelle. Variables contrôlées : ' +
+          'inconnues/manquantes ⇒ 400 AVANT tout envoi ; secrets (mot de passe, jeton, MFA…) et noms ' +
+          'médicaux ⇒ 400 (filtre anti-secrets). Rejouer le même eventKey ⇒ duplicate:true, aucun doublon.',
+        security: bearer,
+        responses: { '201': { description: '{ eventId, duplicate, recipients, inApp, queued }' }, '400': err('Variables invalides ou refusées (sécurité)'), '404': err('Aucun modèle actif pour cette clé') },
+      },
+    },
+    '/admin/notify/queue': {
+      get: {
+        summary: 'Consulter la file de livraison (métadonnées SANS contenu) — notify.manage',
+        security: bearer,
+        parameters: [
+          { name: 'status', in: 'query', required: false, schema: { type: 'string', enum: ['pending', 'processing', 'sent', 'failed', 'cancelled', 'dead_letter'] } },
+          { name: 'channel', in: 'query', required: false, schema: { type: 'string', enum: ['in_app', 'email', 'sms', 'push'] } },
+          { name: 'limit', in: 'query', required: false, schema: { type: 'integer', maximum: 200 } },
+        ],
+        responses: { '200': { description: 'Livraisons du tenant uniquement' } },
+      },
+    },
+    '/admin/notify/queue/process': {
+      post: {
+        summary: 'Traiter les livraisons dues (retries à backoff, dead_letter à épuisement) — notify.manage',
+        description: 'Transport SIMULÉ (DEMO/TEST ONLY) : aucun fournisseur email/SMS/push payant branché. En production, appelé par un déclencheur planifié.',
+        security: bearer,
+        responses: { '200': { description: '{ processed, sent, failed, deadLettered }' } },
+      },
+    },
+    '/admin/notify/deliveries/{id}/attempts': {
+      get: { summary: 'Journal des tentatives d’une livraison (append-only, sans contenu ni secret) — notify.manage', security: bearer, parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Tentatives ordonnées' } } },
+    },
+    '/admin/notify/deliveries/{id}/cancel': {
+      post: { summary: 'Annuler une livraison pending/failed — notify.manage, audité', security: bearer, parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: '{ status: cancelled }' }, '400': err('État incompatible'), '404': err('Introuvable') } },
+    },
+    '/admin/notify/deliveries/{id}/requeue': {
+      post: { summary: 'Requeue d’une livraison dead_letter/cancelled (compteur remis à zéro) — notify.manage, audité', security: bearer, parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: '{ status: pending }' }, '400': err('État incompatible'), '404': err('Introuvable') } },
+    },
     '/openapi.json': {
       get: { summary: 'Cette spécification', responses: { '200': { description: 'OpenAPI 3.0.3' } } },
     },

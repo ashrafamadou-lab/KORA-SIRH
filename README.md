@@ -8,8 +8,8 @@ pas contresigné.
 
 ## État du repo — honnêteté d'abord
 
-**Incrément 1 : socle de données — livré, testé, CI GitHub validée (run vert du 01/08/2026, artefacts publiés).**
-**Incrément 2 (en cours) : auth E1 — domaine pur testé localement ; tranche API à prouver par la CI au prochain push.**
+**Incréments 1 à 3 validés (socle de données, auth E1/E2 + clôture, E3 Workflow Engine, E4 Config Center) — CI verte, artefacts publiés.**
+**Tranche courante : E5 Notification Engine — livré, à prouver par la CI au prochain push. Transport sortant SIMULÉ (aucun fournisseur email/SMS payant branché).**
 
 | Composant | État |
 |---|---|
@@ -29,19 +29,20 @@ pas contresigné.
 | **Clôture E1/E2** (tranche courte) : sessions actives (métadonnées, **jamais de jeton**), révocation d'une session / des autres / administrative ; changement de mot de passe (ancien vérifié, politique `@kora/core`, compromission `off`/`local`/`hibp` avec fail-open/closed **documenté et testé**, **révoque les autres sessions**) ; **API admin** `/admin/users` (créer, activer, désactiver ⇒ révocation totale, affecter des rôles **bornés aux permissions de l'acteur** — anti-élévation, révoquer sessions) — RBAC réel + audit obligatoire | ⚠ Écrit + e2e (négatifs : inter-tenant, escalade, session révoquée réutilisée, mdp non autorisé) |
 | **Workflow Engine v1** (E3) : définitions versionnées immuables, instances à snapshot (version figée), branches conditionnelles, submit/approve/reject/return/cancel/delegate, approbateurs role/user/manager/scope, anti-auto-approbation, échéances+escalades (tick), transitions append-only, idempotence + verrou anti-double-transition | ✅ core+SQL+e2e, CI verte |
 | **Config Center API** (E4) : cycle de vie draft→submitted→approved→(active\|scheduled)→superseded / rejected / retired ; contreseing **via le Workflow Engine** (décision liée à la version exacte) ; séparation création/vérification/activation (créateur ≠ activateur pour juridique) ; résolution temporelle passé/présent/futur ; supersession sans réécriture d'historique ; anti-chevauchement ; surcharges tenant (RLS : global lisible/surchargeacble, jamais réécrit) ; preview d'impact ; permissions ordinaires vs juridiques sensibles | ✅ core+SQL+e2e, CI verte |
-| Notification engine (service), Frontend PWA | ⛔ NOT IMPLEMENTED — incréments suivants / Phase 2-3 |
+| **Notification Engine** (E5) : in-app + architecture multi-canal extensible (email/sms/push en file, **transport SIMULÉ — aucun fournisseur payant branché**) ; modèles bilingues FR/EN versionnés (contenu figé hors draft, une seule version active) ; variables contrôlées (inconnues/manquantes rejetées AVANT envoi) ; **filtre anti-secrets** (noms interdits : mot de passe/jeton/MFA/médical ; valeurs à forme de secret refusées ; journaux assainis SANS contenu) ; idempotence par clé d'événement (2 livraisons = 1 notification logique) ; file `pending/processing/sent/failed/cancelled/dead_letter` + retries à backoff + requeue/cancel admin ; destinataires user/rôle/portée/approbateur ; préférences par canal sortant (in_app = socle), **notifications obligatoires non désactivables** ; pont Workflow Engine (approbateur, demandeur, escalade, délégataire) ; audit admin ; OpenAPI | ✅ migration 0012 + test SQL 100, core notify (61 tests), 17 e2e — **preuve = CI** |
+| Frontend PWA | ⛔ NOT IMPLEMENTED — Phase 2-3 |
 | CI GitHub Actions | ✅ `db-socle` validé sur GitHub ; jobs `core` et `api` (actions v6/v7, **Node ≥ 22.18 épinglé**) |
 | Lockfile npm (`package-lock.json`) | ⚠ **Requis committé à la racine avant la CI** (le job `api` refuse de tourner sans, puis `npm ci` exclusivement — aucune écriture de la CI sur `main`). Génération : `npm install --package-lock-only` à la racine sur un poste avec accès registre, ou workflow manuel « Générer le lockfile » (artefact à committer soi-même) |
 
 ## Structure
 
 ```text
-apps/api/    API NestJS : Prisma (rôle kora_app, withTenant/set_config), auth E1, e2e node:test
-packages/core/  domaine pur zéro dépendance (TOTP, mdp, lockout, jetons, RBAC) + tests
+apps/api/    API NestJS : Prisma (rôle kora_app, withTenant/set_config), auth, workflow, config, notify, e2e node:test
+packages/core/  domaine pur zéro dépendance (TOTP, mdp, lockout, jetons, RBAC, workflow, notify) + tests
 infra/
   docker-compose.yml       Postgres 16 + Redis + MinIO + Mailpit (dev)
   db/
-    migrations/            0001→0006 : schémas, RBAC, core, paramètres, audit, RLS
+    migrations/            0001→0012 : schémas, RBAC, core, paramètres, audit, RLS, auth, workflow, config, notify
     seed/seed_dev.sql      rôles seed, tenants DEMO, paramètres Bénin (draft)
     migrate.sh · seed.sh   runner SQL-first (ledger meta.schema_migrations)
     tests/                 suite psql pure — run_tests.sh

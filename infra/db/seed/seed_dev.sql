@@ -74,4 +74,48 @@ VALUES
   ('BJ', 'hse.service_autonome.seuil',         '100',     'travailleurs',        '2026-01-01', 'Code du travail, art. 194 (à contresigner)', 'high', 'draft', 'TRV-19', 'Établissements industriels')
 ON CONFLICT DO NOTHING;
 
+-- ---------- Modèles de notification par défaut (E5) — tenant demo-industrie ----------
+-- Bilingues FR/EN, variables contrôlées, canal in_app (socle). Actifs d'emblée : un
+-- modèle de notification n'est pas un paramètre légal (pas de contreseing requis) ; son
+-- cycle de vie versionné (draft→active→superseded) s'applique aux évolutions.
+INSERT INTO notify.templates
+  (tenant_id, key, version, status, name, subject_fr, subject_en, body_fr, body_en, variables, channels, activated_at)
+VALUES
+  ('11111111-1111-4111-8111-111111111111', 'workflow.step_pending', 1, 'active', 'Workflow — étape à approuver',
+   'Une demande attend votre décision', 'A request awaits your decision',
+   'Le circuit « {{workflow}} » attend votre décision à l''étape « {{etape}} ».',
+   'Workflow "{{workflow}}" awaits your decision at step "{{etape}}".',
+   '["workflow","etape"]', '["in_app"]', now()),
+  ('11111111-1111-4111-8111-111111111111', 'workflow.approved', 1, 'active', 'Workflow — demande approuvée',
+   'Votre demande est approuvée', 'Your request is approved',
+   'Votre demande dans le circuit « {{workflow}} » a été approuvée.',
+   'Your request in workflow "{{workflow}}" has been approved.',
+   '["workflow"]', '["in_app"]', now()),
+  ('11111111-1111-4111-8111-111111111111', 'workflow.rejected', 1, 'active', 'Workflow — demande rejetée',
+   'Votre demande est rejetée', 'Your request is rejected',
+   'Votre demande dans le circuit « {{workflow}} » a été rejetée.',
+   'Your request in workflow "{{workflow}}" has been rejected.',
+   '["workflow"]', '["in_app"]', now()),
+  ('11111111-1111-4111-8111-111111111111', 'workflow.returned', 1, 'active', 'Workflow — demande retournée',
+   'Votre demande vous est retournée', 'Your request was returned',
+   'Votre demande dans le circuit « {{workflow}} » vous est retournée pour complément.',
+   'Your request in workflow "{{workflow}}" was returned for completion.',
+   '["workflow"]', '["in_app"]', now()),
+  ('11111111-1111-4111-8111-111111111111', 'workflow.escalated', 1, 'active', 'Workflow — échéance dépassée',
+   'Échéance dépassée sur une demande', 'Deadline breached on a request',
+   'L''étape « {{etape}} » du circuit « {{workflow}} » a dépassé son échéance.',
+   'Step "{{etape}}" of workflow "{{workflow}}" breached its deadline.',
+   '["workflow","etape"]', '["in_app"]', now()),
+  ('11111111-1111-4111-8111-111111111111', 'workflow.delegated', 1, 'active', 'Workflow — étape déléguée',
+   'Une étape vous a été déléguée', 'A step was delegated to you',
+   'L''étape « {{etape}} » du circuit « {{workflow}} » vous a été déléguée.',
+   'Step "{{etape}}" of workflow "{{workflow}}" was delegated to you.',
+   '["workflow","etape"]', '["in_app"]', now()),
+  ('11111111-1111-4111-8111-111111111111', 'workflow.cancelled', 1, 'active', 'Workflow — demande annulée',
+   'Votre demande est annulée', 'Your request is cancelled',
+   'Votre demande dans le circuit « {{workflow}} » a été annulée.',
+   'Your request in workflow "{{workflow}}" has been cancelled.',
+   '["workflow"]', '["in_app"]', now())
+ON CONFLICT (tenant_id, key, version) DO NOTHING;
+
 COMMIT;

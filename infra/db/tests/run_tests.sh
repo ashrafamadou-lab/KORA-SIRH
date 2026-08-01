@@ -14,7 +14,7 @@ export DATABASE_URL_APP="${DATABASE_URL_APP:-postgres://kora_app:kora_app_dev@12
 export DATABASE_URL_SUPER="${DATABASE_URL_SUPER:-}"
 
 pass=0; fail=0; skip=0
-for f in "$DIR"/[0-9][0-9]_*.sql; do
+for f in "$DIR"/[0-9][0-9]*_*.sql; do
   base="$(basename "$f")"
   if [[ "$base" == 50_* && -z "$DATABASE_URL_SUPER" ]]; then
     echo "SKIP  $base (DATABASE_URL_SUPER non défini)"
