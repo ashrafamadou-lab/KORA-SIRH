@@ -106,28 +106,31 @@ export class AuditService {
   ): Promise<AuditRow[]> {
     // Les modules visibles passent en param TEXTE (string_to_array) : bind portable,
     // aucun risque de sérialisation de tableau côté driver. Noms bornés à [a-z_].
+    // NB : la table est aliassée `a` et ORDER BY est QUALIFIÉ (a.id) — un ORDER BY sur
+    // le nom nu résoudrait vers l'alias de sortie id::text (tri LEXICOGRAPHIQUE, bug de
+    // pagination constaté en CI, run 30702385955).
     const modulesCsv = access.modules.join(',');
     return tx.$queryRaw<AuditRow[]>`
-      SELECT id::text AS id, occurred_at, actor_user_id, on_behalf_of, action, module,
-             record_type, record_id, employee_id, reason, result, correlation_id, workflow_ref,
-             CASE WHEN ${opts.withValues} THEN old_value ELSE NULL END AS old_value,
-             CASE WHEN ${opts.withValues} THEN new_value ELSE NULL END AS new_value
-        FROM audit.audit_log
+      SELECT a.id::text AS id, a.occurred_at, a.actor_user_id, a.on_behalf_of, a.action, a.module,
+             a.record_type, a.record_id, a.employee_id, a.reason, a.result, a.correlation_id, a.workflow_ref,
+             CASE WHEN ${opts.withValues} THEN a.old_value ELSE NULL END AS old_value,
+             CASE WHEN ${opts.withValues} THEN a.new_value ELSE NULL END AS new_value
+        FROM audit.audit_log a
        WHERE (${access.all}
-              OR module = ANY(string_to_array(${modulesCsv}, ','))
-              OR (${access.own} AND actor_user_id = ${selfUserId}::uuid))
-         AND (${f.from ?? null}::timestamptz IS NULL OR occurred_at >= ${f.from ?? null}::timestamptz)
-         AND (${f.to ?? null}::timestamptz IS NULL OR occurred_at <= ${f.to ?? null}::timestamptz)
-         AND (${f.actorUserId ?? null}::uuid IS NULL OR actor_user_id = ${f.actorUserId ?? null}::uuid)
-         AND (${f.action ?? null}::text IS NULL OR action = ${f.action ?? null})
-         AND (${f.module ?? null}::text IS NULL OR module = ${f.module ?? null})
-         AND (${f.recordType ?? null}::text IS NULL OR record_type = ${f.recordType ?? null})
-         AND (${f.recordId ?? null}::text IS NULL OR record_id = ${f.recordId ?? null})
-         AND (${f.result ?? null}::text IS NULL OR result = ${f.result ?? null})
-         AND (${f.correlationId ?? null}::uuid IS NULL OR correlation_id = ${f.correlationId ?? null}::uuid)
-         AND (${f.employeeId ?? null}::uuid IS NULL OR employee_id = ${f.employeeId ?? null}::uuid)
-         AND (${opts.beforeId}::bigint IS NULL OR id < ${opts.beforeId}::bigint)
-       ORDER BY id DESC
+              OR a.module = ANY(string_to_array(${modulesCsv}, ','))
+              OR (${access.own} AND a.actor_user_id = ${selfUserId}::uuid))
+         AND (${f.from ?? null}::timestamptz IS NULL OR a.occurred_at >= ${f.from ?? null}::timestamptz)
+         AND (${f.to ?? null}::timestamptz IS NULL OR a.occurred_at <= ${f.to ?? null}::timestamptz)
+         AND (${f.actorUserId ?? null}::uuid IS NULL OR a.actor_user_id = ${f.actorUserId ?? null}::uuid)
+         AND (${f.action ?? null}::text IS NULL OR a.action = ${f.action ?? null})
+         AND (${f.module ?? null}::text IS NULL OR a.module = ${f.module ?? null})
+         AND (${f.recordType ?? null}::text IS NULL OR a.record_type = ${f.recordType ?? null})
+         AND (${f.recordId ?? null}::text IS NULL OR a.record_id = ${f.recordId ?? null})
+         AND (${f.result ?? null}::text IS NULL OR a.result = ${f.result ?? null})
+         AND (${f.correlationId ?? null}::uuid IS NULL OR a.correlation_id = ${f.correlationId ?? null}::uuid)
+         AND (${f.employeeId ?? null}::uuid IS NULL OR a.employee_id = ${f.employeeId ?? null}::uuid)
+         AND (${opts.beforeId}::bigint IS NULL OR a.id < ${opts.beforeId}::bigint)
+       ORDER BY a.id DESC
        LIMIT ${opts.limit}`;
   }
 
@@ -234,11 +237,14 @@ export class AuditService {
 
       while (checked < opts.maxRows) {
         const lim = Math.min(SEGMENT_SIZE, opts.maxRows - checked);
+        // Casts EXPLICITES sur tous les arguments : Prisma envoie les entiers JS en
+        // bigint et PostgreSQL ne convertit pas implicitement bigint→int pour résoudre
+        // une fonction (42883 constaté en CI, run 30702385955).
         const seg = (await tx.$queryRaw<Array<{
           broken_id: string | null; checked: number; last_id: string; last_hash: string | null;
         }>>`
           SELECT broken_id::text AS broken_id, checked, last_id::text AS last_id, last_hash
-            FROM audit.verify_chain_segment(${tenantId}::uuid, ${after}::bigint, ${seed}, ${lim})`)[0]!;
+            FROM audit.verify_chain_segment(${tenantId}::uuid, ${after}::bigint, ${seed}::text, ${lim}::int)`)[0]!;
         checked += seg.checked;
         if (seg.checked > 0) lastId = seg.last_id;
         if (seg.broken_id !== null) {

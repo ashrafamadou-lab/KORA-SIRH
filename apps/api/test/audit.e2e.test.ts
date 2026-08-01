@@ -256,9 +256,12 @@ test('exports : bornés à la visibilité, masqués, plafonnés — et audités'
   const csvRes = await get('/audit/export/csv?module=bulk&limit=10', audTok);
   assert.equal(csvRes.status, 200);
   assert.ok((csvRes.headers.get('content-type') ?? '').includes('text/csv'));
-  const csv = await csvRes.text();
-  assert.ok(csv.startsWith('﻿'), 'BOM UTF-8');
-  const lines = csv.slice(1).split('\r\n').filter((l) => l.length > 0);
+  // BOM vérifié sur les OCTETS BRUTS : fetch().text() supprime un BOM UTF-8 de tête
+  // par spécification WHATWG — le fil, lui, doit le porter (Excel).
+  const raw = Buffer.from(await csvRes.arrayBuffer());
+  assert.deepEqual([raw[0], raw[1], raw[2]], [0xef, 0xbb, 0xbf], 'BOM UTF-8 sur le fil');
+  const csv = raw.subarray(3).toString('utf8');
+  const lines = csv.split('\r\n').filter((l) => l.length > 0);
   assert.equal(lines.length, 11, 'en-tête + 10 lignes');
   assert.ok(lines[0]!.startsWith('id;occurredAt;'));
   // JSON : le secret est masqué dans l'export aussi.
