@@ -423,12 +423,30 @@ export class WorkflowService {
       ON CONFLICT (instance_id, idempotency_key) DO NOTHING`;
   }
 
-  /** Effet métier générique sur l'objet de démonstration (prouve on_approve/on_reject). */
+  /**
+   * Effet métier générique à l'atteinte d'un état. Le sujet EST l'objet métier exact
+   * (sa version, pour un paramètre) : la décision du workflow est donc liée à la version
+   * précise concernée. Deux consommateurs v1 : l'objet de démonstration et le Config
+   * Center (le lien E3→E4 du contreseing).
+   */
   private async syncSubject(
     tx: Prisma.TransactionClient, subjectType: string, subjectId: string, status: string,
   ): Promise<void> {
-    if (subjectType !== 'demo_request') return;
-    await tx.$executeRaw`
-      UPDATE workflow.demo_requests SET status = ${status} WHERE id = ${subjectId}::uuid`;
+    if (subjectType === 'demo_request') {
+      await tx.$executeRaw`
+        UPDATE workflow.demo_requests SET status = ${status} WHERE id = ${subjectId}::uuid`;
+      return;
+    }
+    if (subjectType === 'legal_parameter' || subjectType === 'parameter') {
+      // Le contreseing pilote le cycle de vie de la version : submitted → approved/rejected,
+      // cancelled → retour en draft (resoumission). On ne touche jamais une version déjà
+      // active/scheduled/superseded.
+      const paramStatus =
+        status === 'approved' ? 'approved' : status === 'rejected' ? 'rejected' : status === 'cancelled' ? 'draft' : null;
+      if (!paramStatus) return;
+      await tx.$executeRaw`
+        UPDATE compliance.legal_parameters SET status = ${paramStatus}
+         WHERE id = ${subjectId}::uuid AND status IN ('submitted', 'approved')`;
+    }
   }
 }

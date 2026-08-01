@@ -401,6 +401,73 @@ export const OPENAPI_SPEC = {
     '/workflow/tick': {
       post: { summary: 'Balayer les échéances (relances + escalades) — workflow.manage', security: bearer, responses: { '200': { description: '{ reminded, escalated }' } } },
     },
+    '/config/parameters': {
+      post: {
+        summary: 'Créer une version draft de paramètre — permission parameters.create ou legal_parameters.create',
+        security: bearer,
+        responses: { '201': { description: 'Draft créé' }, '400': err('Clé/date invalide ou source manquante (juridique)'), '403': err('Permission absente') },
+      },
+    },
+    '/config/parameters/{id}/submit': {
+      post: {
+        summary: 'Soumettre au contreseing via le Workflow Engine (definitionKey requis)',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ instanceId } — instance de workflow créée' }, '403': err('Permission absente'), '404': err('Introuvable'), '409': err('Non draft, ou aucun workflow de contreseing actif') },
+      },
+    },
+    '/config/parameters/{id}/activate': {
+      post: {
+        summary: 'Activer un paramètre approuvé (immédiat ou planifié selon la date d’effet)',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: {
+          '200': { description: '{ status: active | scheduled }' },
+          '403': err('Permission absente, ou créateur = activateur (séparation des tâches, juridique)'),
+          '404': err('Introuvable'),
+          '409': err('Non approuvé, contreseing manquant, ou chevauchement de périodes (code=overlap)'),
+        },
+      },
+    },
+    '/config/parameters/{id}/reset-draft': {
+      post: {
+        summary: 'Repartir d’un draft après un rejet (resoumission)',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ status: draft }' }, '409': err('N’est pas rejeté') },
+      },
+    },
+    '/config/parameters/tick': {
+      post: { summary: 'Promouvoir les versions planifiées dont la date d’effet est atteinte — parameters.activate', security: bearer, responses: { '200': { description: '{ promoted }' } } },
+    },
+    '/config/parameters/resolve': {
+      get: {
+        summary: 'Valeur applicable à une date (query key, date, country) — jamais un draft',
+        security: bearer,
+        parameters: [
+          { name: 'key', in: 'query', required: true, schema: { type: 'string' } },
+          { name: 'date', in: 'query', required: true, schema: { type: 'string', format: 'date' } },
+          { name: 'country', in: 'query', required: false, schema: { type: 'string' } },
+        ],
+        responses: { '200': { description: 'Valeur résolue (scope tenant ou country)' }, '404': err('Aucune valeur applicable') },
+      },
+    },
+    '/config/parameters/history': {
+      get: {
+        summary: 'Historique des versions et sources (query key, country)',
+        security: bearer,
+        parameters: [{ name: 'key', in: 'query', required: true, schema: { type: 'string' } }, { name: 'country', in: 'query', required: false, schema: { type: 'string' } }],
+        responses: { '200': { description: 'Versions ordonnées par date d’effet' } },
+      },
+    },
+    '/config/parameters/{id}/preview': {
+      get: {
+        summary: 'Prévisualiser l’impact avant activation (valeur candidate vs actuellement applicable)',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: 'candidateValue + currentlyApplicableAtThatDate' }, '404': err('Introuvable') },
+      },
+    },
     '/openapi.json': {
       get: { summary: 'Cette spécification', responses: { '200': { description: 'OpenAPI 3.0.3' } } },
     },

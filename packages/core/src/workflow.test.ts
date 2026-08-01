@@ -126,3 +126,53 @@ test('authz : délégation d’instance prioritaire ; seul un assigné peut dél
   assert.equal(canDelegate(manager, { step: roleStep, instanceContext: {}, createdBy: requester }).allowed, true);
   assert.equal(canDelegate(actor('nobody'), { step: roleStep, instanceContext: {}, createdBy: requester }).allowed, false);
 });
+
+// ---------- Cycle de vie des paramètres (E4) ----------
+import {
+  activationAllowed,
+  activationStatusFor,
+  canTransition,
+  isContentEditable,
+  RESOLVABLE_STATUSES,
+} from './parameter-lifecycle.ts';
+
+test('paramètres : transitions autorisées et interdites', () => {
+  assert.equal(canTransition('draft', 'submitted'), true);
+  assert.equal(canTransition('submitted', 'approved'), true);
+  assert.equal(canTransition('approved', 'active'), true);
+  assert.equal(canTransition('approved', 'scheduled'), true);
+  assert.equal(canTransition('active', 'superseded'), true);
+  assert.equal(canTransition('rejected', 'draft'), true, 'resoumission possible');
+  // interdites
+  assert.equal(canTransition('draft', 'active'), false, 'pas d’activation directe sans contreseing');
+  assert.equal(canTransition('active', 'draft'), false);
+  assert.equal(canTransition('superseded', 'active'), false);
+  assert.equal(canTransition('retired', 'active'), false);
+});
+
+test('paramètres : contenu éditable en draft seulement', () => {
+  assert.equal(isContentEditable('draft'), true);
+  for (const s of ['submitted', 'approved', 'scheduled', 'active', 'superseded'] as const) {
+    assert.equal(isContentEditable(s), false);
+  }
+});
+
+test('paramètres : active vs scheduled selon la date d’effet', () => {
+  assert.equal(activationStatusFor('2026-01-01', '2026-08-01'), 'active', 'effet passé → active');
+  assert.equal(activationStatusFor('2026-08-01', '2026-08-01'), 'active', 'effet aujourd’hui → active');
+  assert.equal(activationStatusFor('2027-01-01', '2026-08-01'), 'scheduled', 'effet futur → scheduled');
+});
+
+test('paramètres : résolution ne considère que active/scheduled/superseded', () => {
+  assert.deepEqual([...RESOLVABLE_STATUSES].sort(), ['active', 'scheduled', 'superseded']);
+  for (const s of ['draft', 'submitted', 'approved', 'rejected', 'retired'] as const) {
+    assert.equal(RESOLVABLE_STATUSES.has(s), false, `${s} jamais résolu`);
+  }
+});
+
+test('paramètres : séparation des tâches à l’activation (créateur ≠ activateur pour juridique)', () => {
+  assert.equal(activationAllowed({ createdBy: 'u1', actorUserId: 'u1', isLegalSensitive: true }).allowed, false);
+  assert.equal(activationAllowed({ createdBy: 'u1', actorUserId: 'u2', isLegalSensitive: true }).allowed, true);
+  // paramètre ordinaire : le créateur peut activer (pas de contrainte juridique)
+  assert.equal(activationAllowed({ createdBy: 'u1', actorUserId: 'u1', isLegalSensitive: false }).allowed, true);
+});
