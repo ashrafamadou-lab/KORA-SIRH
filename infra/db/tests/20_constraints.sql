@@ -7,8 +7,11 @@
 SELECT substr(md5(random()::text), 1, 8) AS rid \gset
 INSERT INTO admin.tenants (slug, name, is_demo) VALUES ('test-cst-a-' || :'rid', 'Test CST A', true) RETURNING id AS tenant_a \gset
 INSERT INTO admin.tenants (slug, name, is_demo) VALUES ('test-cst-b-' || :'rid', 'Test CST B', true) RETURNING id AS tenant_b \gset
-INSERT INTO core.employees (tenant_id, matricule, first_name, last_name, cnss_number)
-VALUES (:'tenant_a', 'M-0001', 'Afi', 'Houngbo', 'CNSS-TEST-1') RETURNING id AS emp_a \gset
+INSERT INTO core.employees (tenant_id, matricule, first_name, last_name)
+VALUES (:'tenant_a', 'M-0001', 'Afi', 'Houngbo') RETURNING id AS emp_a \gset
+-- Depuis E9 (0015), le CNSS vit dans la zone administrative dédiée.
+INSERT INTO core.employee_identifiers (tenant_id, employee_id, cnss_number)
+VALUES (:'tenant_a', :'emp_a', 'CNSS-TEST-1');
 INSERT INTO core.employees (tenant_id, matricule, first_name, last_name)
 VALUES (:'tenant_b', 'M-0001', 'Sena', 'Agbodjan');   -- même matricule, autre tenant : DOIT passer
 
@@ -79,12 +82,15 @@ BEGIN
   END;
 END $$;
 
--- Unicité du numéro CNSS par tenant (index partiel).
+-- Unicité du numéro CNSS par tenant (index partiel — zone administrative E9).
 DO $$
+DECLARE emp2 uuid;
 BEGIN
+  INSERT INTO core.employees (tenant_id, matricule, first_name, last_name)
+  VALUES (current_setting('test.tenant_a')::uuid, 'M-0002', 'Doublon', 'CNSS') RETURNING id INTO emp2;
   BEGIN
-    INSERT INTO core.employees (tenant_id, matricule, first_name, last_name, cnss_number)
-    VALUES (current_setting('test.tenant_a')::uuid, 'M-0002', 'Doublon', 'CNSS', 'CNSS-TEST-1');
+    INSERT INTO core.employee_identifiers (tenant_id, employee_id, cnss_number)
+    VALUES (current_setting('test.tenant_a')::uuid, emp2, 'CNSS-TEST-1');
     RAISE EXCEPTION 'unicité CNSS : le doublon intra-tenant aurait dû être rejeté';
   EXCEPTION WHEN unique_violation THEN NULL;
   END;

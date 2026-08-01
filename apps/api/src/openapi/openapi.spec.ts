@@ -87,6 +87,9 @@ export const OPENAPI_SPEC = {
       },
       Salaries: {
         type: 'object',
+        description:
+          'Zone PROFESSIONNELLE uniquement (E9) — jamais d’identifiants complets, de coordonnées personnelles, ' +
+          'd’urgence, de documents ni de données médicales dans les listes générales.',
         properties: {
           items: {
             type: 'array',
@@ -97,7 +100,16 @@ export const OPENAPI_SPEC = {
                 matricule: { type: 'string' },
                 firstName: { type: 'string' },
                 lastName: { type: 'string' },
-                status: { type: 'string' },
+                usageFirstName: { type: 'string', nullable: true },
+                usageLastName: { type: 'string', nullable: true },
+                status: { type: 'string', enum: ['draft', 'pre_hire', 'active', 'suspended', 'on_leave', 'terminated', 'archived'] },
+                hireDate: { type: 'string', format: 'date', nullable: true },
+                professionalStatus: { type: 'string', nullable: true },
+                employerCompanyId: { type: 'string', format: 'uuid', nullable: true },
+                mainSiteId: { type: 'string', format: 'uuid', nullable: true },
+                workEmail: { type: 'string', nullable: true },
+                workPhone: { type: 'string', nullable: true },
+                photoRef: { type: 'string', nullable: true },
               },
             },
           },
@@ -275,18 +287,173 @@ export const OPENAPI_SPEC = {
     },
     '/employees': {
       get: {
-        summary: 'Liste des salariés (permission employees.view, bornée RLS au tenant)',
+        summary: 'Liste des dossiers salariés — zone PROFESSIONNELLE uniquement, filtrée par la PORTÉE réelle de l’acteur (E9)',
+        description:
+          'employees.view requis. Portée tenant = tout le tenant ; legal_entity/site/department/team = les salariés ' +
+          'dont l’affectation PRINCIPALE applicable tombe dans le périmètre. JAMAIS dans cette liste : identifiants ' +
+          'complets (CNSS, fiscal, pièces), coordonnées personnelles, contacts d’urgence, coordonnées bancaires, ' +
+          'documents, données médicales. Filtres : query, status, companyId, siteId, unitId, limit (≤200), offset.',
         security: bearer,
         responses: {
           '200': {
-            description: 'Liste (limite 100 — pagination par curseur à la tranche Core HR)',
+            description: 'Zone professionnelle des salariés du périmètre',
             content: {
               'application/json': { schema: { $ref: '#/components/schemas/Salaries' } },
             },
           },
           '401': err('Session invalide'),
-          '403': err('Permission absente ou portée non couvrante (anti-élévation)'),
+          '403': err('Permission absente ou aucune portée applicable (anti-élévation)'),
         },
+      },
+      post: {
+        summary: 'Créer un dossier salarié (statut initial : draft) — employees.manage, audité',
+        description: 'matricule UNIQUE dans le tenant (A-Z, 0-9, . _ -, 30 max) et IMMUABLE ensuite. Les zones personnelle et administrative se renseignent via leurs routes dédiées.',
+        security: bearer,
+        responses: { '201': { description: '{ id, status: draft }' }, '400': err('Champ invalide ou référence introuvable'), '409': err('Matricule déjà utilisé (code=duplicate_matricule)') },
+      },
+    },
+    '/employees/{id}': {
+      get: {
+        summary: 'Détail PROFESSIONNEL d’un dossier + affectation principale courante — employees.view (hors périmètre : 404)',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: 'Zone professionnelle + currentAssignment' }, '404': err('Introuvable ou hors périmètre (aucune divulgation)') },
+      },
+      patch: {
+        summary: 'Modifier la zone professionnelle (identité d’usage, dates, rattachements de référence) — employees.manage par cible, audité old/new',
+        description: 'Le matricule est IMMUABLE (garde SQL) ; le statut se change exclusivement via /employees/{id}/status.',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ updated }' }, '400': err('Champ invalide'), '403': err('Portée non couvrante'), '404': err('Introuvable') },
+      },
+    },
+    '/employees/{id}/private': {
+      get: {
+        summary: 'Zone PERSONNELLE (naissance, nationalité, sexe déclaratif, coordonnées, adresse, urgence) — employees.view_private, lecture AUDITÉE',
+        description: 'Chaque consultation laisse une trace d’audit nominative (employee_private_viewed). Le sexe n’est collecté que pour les déclarations sociales légales (finalité documentée) — jamais décisionnel.',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ private }' }, '403': err('Permission dédiée absente'), '404': err('Introuvable ou hors périmètre') },
+      },
+      put: {
+        summary: 'Renseigner la zone personnelle — employees.manage + employees.view_private, audit à valeurs MASQUÉES',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ updated }' }, '400': err('Champ invalide'), '403': err('Permission ou portée insuffisante'), '404': err('Introuvable') },
+      },
+    },
+    '/employees/{id}/identifiers': {
+      get: {
+        summary: 'Zone ADMINISTRATIVE (CNSS, IFU, pièce d’identité) — employees.view_identifiers, lecture AUDITÉE',
+        description: 'Le format du numéro CNSS est un PARAMÈTRE juridique (CNS-06) — jamais une règle en dur. Chaque consultation laisse une trace (employee_identifiers_viewed).',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ identifiers }' }, '403': err('Permission dédiée absente'), '404': err('Introuvable ou hors périmètre') },
+      },
+      put: {
+        summary: 'Renseigner la zone administrative — employees.manage + employees.view_identifiers, audit à valeurs MASQUÉES (•••+3)',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ updated }' }, '400': err('Champ invalide'), '403': err('Permission ou portée insuffisante'), '404': err('Introuvable'), '409': err('CNSS déjà rattaché à un autre dossier — la valeur n’est jamais renvoyée (code=duplicate_cnss)') },
+      },
+    },
+    '/employees/{id}/documents': {
+      get: {
+        summary: 'MÉTADONNÉES des documents du dossier — employees.view_documents, lecture AUDITÉE',
+        description: 'Métadonnées uniquement : type, libellé, sensibilité, dates. Le CONTENU et les références de stockage ne sont JAMAIS exposés — le module documentaire est un incrément ultérieur (NOT IMPLEMENTED).',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ documents[] }' }, '403': err('Permission dédiée absente'), '404': err('Introuvable ou hors périmètre') },
+      },
+      post: {
+        summary: 'Déclarer un document (métadonnées) — employees.manage par cible, audité',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '201': { description: '{ id }' }, '400': err('Type de document inconnu'), '403': err('Portée non couvrante'), '404': err('Introuvable') },
+      },
+    },
+    '/employees/{id}/status': {
+      post: {
+        summary: 'Transition de cycle de vie (draft→pre_hire→active⇄suspended/on_leave→terminated→archived, RÉINTÉGRATION terminated→active) — employees.manage par cible',
+        description:
+          'Transitions contrôlées (miroir applicatif + garde SQL), TOUTES auditées avec old/new et tracées en ' +
+          'ÉVÉNEMENT DE CARRIÈRE append-only. Une cessation CLÔT les affectations ouvertes à la date d’effet et ne ' +
+          'supprime JAMAIS le dossier ni ne réécrit l’historique. Avec workflowDefinitionKey : changement soumis au ' +
+          'Workflow Engine (E3), appliqué seulement à l’approbation (conflict si l’état a bougé). Notification ' +
+          'hr.change_applied APRÈS application effective (demandeur + salarié lié).',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ status, effectiveDate, careerEvent } ou { submitted, pendingChangeId, workflowInstanceId }' }, '400': err('Transition interdite'), '403': err('Portée non couvrante'), '404': err('Introuvable ou définition de workflow inactive') },
+      },
+    },
+    '/employees/{id}/assignments': {
+      get: {
+        summary: 'Historique COMPLET des affectations datées — employees.view_history',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ assignments[] } (périodes closes ET ouvertes — rien n’est effacé)' }, '404': err('Introuvable ou hors périmètre') },
+      },
+      post: {
+        summary: 'Créer une affectation DATÉE (société, site?, unité, poste?, emploi?, centre de coûts?, manager dérogatoire?) — employees.assign + portée réelle',
+        description:
+          'UNE SEULE affectation PRINCIPALE applicable à une date (contrainte d’exclusion PostgreSQL) : la nouvelle ' +
+          'principale CLÔT la précédente à la date d’effet — l’histoire reste consultable. Secondaires/intérim avec ' +
+          'pourcentage (allocationPct 1..100, assignmentKind standard|interim|temporary). Le poste visé doit être ' +
+          'ACTIF et rattaché à l’organisation à la date d’effet (sinon 409 position_not_active). Portée : l’acteur ' +
+          'doit couvrir le salarié ET l’unité cible. Toutes les cibles sont des FK COMPOSITES — l’inter-tenant est ' +
+          'rejeté par PostgreSQL. Avec workflowDefinitionKey : soumission E3, application à l’approbation.',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '201': { description: '{ id, careerEvent } ou { submitted, … }' }, '400': err('Référence introuvable ou champ invalide'), '403': err('Portée non couvrante (salarié ou cible)'), '404': err('Introuvable'), '409': err('Poste inactif à la date (code=position_not_active)') },
+      },
+    },
+    '/employees/{id}/career': {
+      get: {
+        summary: 'Historique de carrière APPEND-ONLY (hire, transfer, promotion, suspension, termination, reinstatement…) — employees.view_history',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ events[] } — aucun événement n’est jamais modifié ni supprimé (garde SQL)' }, '404': err('Introuvable ou hors périmètre') },
+      },
+    },
+    '/employees/{id}/at': {
+      get: {
+        summary: 'État du dossier À UNE DATE : statut (reconstruit de la carrière), affectation principale applicable, responsable résolu — employees.view_history',
+        description: 'Une mutation FUTURE ne change JAMAIS la lecture passée : le statut vient des événements de carrière, l’affectation des périodes datées.',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'date', in: 'query', required: false, schema: { type: 'string', format: 'date' } }],
+        responses: { '200': { description: '{ date, status, assignment, manager }' }, '404': err('Introuvable ou hors périmètre') },
+      },
+    },
+    '/employees/{id}/manager': {
+      get: {
+        summary: 'Responsable hiérarchique À UNE DATE — dérogation explicite sinon RÉSOLUTION PAR LA STRUCTURE DES POSTES (E8)',
+        description: 'Ordre : manager_override de l’affectation principale, sinon poste → org.position_manager_at(date) → titulaire principal de ce poste à la date.',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'date', in: 'query', required: false, schema: { type: 'string', format: 'date' } }],
+        responses: { '200': { description: '{ date, manager } (via=override|position)' }, '404': err('Introuvable ou hors périmètre') },
+      },
+    },
+    '/hr/import': {
+      post: {
+        summary: 'Import CSV de salariés (preview | apply ATOMIQUE, stratégie EXPLICITE create_only) — employees.import, audité',
+        description:
+          'Colonnes : matricule, last_name, first_name, hire_date, company_code, site_code, unit_code, position_code, ' +
+          'job_code, cost_center_code, effective_from, professional_status, work_email, birth_date, nationality, ' +
+          'personal_email, personal_phone, cnss_number, tax_id. Validation COMPLÈTE avant toute écriture (structure, ' +
+          'doublons fichier ET base, références organisationnelles par code, poste actif à la date) : la moindre ' +
+          'erreur ⇒ 422 avec rapport PAR LIGNE et ZÉRO insertion. Les valeurs CNSS/fiscales ne figurent JAMAIS dans ' +
+          'les rapports. Seule la stratégie create_only est implémentée — les mises à jour par import sont un ' +
+          'incrément ultérieur (NOT IMPLEMENTED).',
+        security: bearer,
+        responses: { '200': { description: '{ mode, counts } (preview valide ou import appliqué)' }, '422': err('Rapport d’erreurs par ligne — aucune écriture') },
+      },
+    },
+    '/hr/changes/{id}': {
+      get: {
+        summary: 'Suivre un changement RH soumis au workflow (pending/applied/rejected/cancelled/conflict) — employees.view',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: 'Changement + statut' }, '404': err('Introuvable') },
       },
     },
     '/admin/users': {

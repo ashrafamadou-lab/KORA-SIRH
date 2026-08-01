@@ -39,7 +39,11 @@ test('clés secrètes détectées (hash, token, mfa, mot de passe…), clés mé
   for (const k of ['password_hash', 'token_hash', 'mfa_secret', 'mot_de_passe', 'api_key', 'authorization', 'cookie']) {
     assert.ok(isSecretKey(k), `${k} doit être masqué`);
   }
-  for (const k of ['key', 'status', 'email', 'salaire_base', 'effective_from']) {
+  // E9 : identifiants personnels du dossier salarié — masqués aussi en consultation.
+  for (const k of ['cnss_number', 'tax_id', 'ifu', 'id_document_number', 'iban', 'bank_account', 'emergency_phone', 'emergency_name']) {
+    assert.ok(isSecretKey(k), `${k} (identifiant personnel) doit être masqué`);
+  }
+  for (const k of ['key', 'status', 'email', 'salaire_base', 'effective_from', 'matricule', 'id_document_type', 'nationality']) {
     assert.ok(!isSecretKey(k), `${k} ne doit pas être masqué d'office`);
   }
 });

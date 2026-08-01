@@ -60,7 +60,7 @@ before(async () => {
   targetId = psql(`INSERT INTO admin.users (tenant_id, email, password_hash) VALUES ('${a.tenantId}','${targetEmail}','${hashA}') RETURNING id`);
   psql(`INSERT INTO admin.users (tenant_id, email, password_hash) VALUES ('${b.tenantId}','${bEmail}','${hashB}')`);
 
-  // employees.view vient du SEED, jamais d'une migration — la CI migre sans seeder :
+  // employees.view arrive avec 0015 (E9), mais ce test reste autoporteur — la CI migre sans seeder :
   // on l'insère au catalogue ici (même motif qu'auth.e2e) au lieu de dépendre de la
   // course avec l'autre fichier de test.
   psql(`INSERT INTO admin.permissions (key, description) VALUES ('employees.view', 'e2e') ON CONFLICT (key) DO NOTHING`);

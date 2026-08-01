@@ -340,9 +340,16 @@ test('RBAC : permission chargée en base, anti-élévation par portée', async (
   const body = (await ok.json()) as { items: Array<{ matricule: string }>; count: number };
   assert.ok(body.items.some((e) => e.matricule === 'E2E-0001'), 'le salarié seedé est visible');
 
+  // Depuis E9, les PORTÉES RÉELLES s'appliquent : la portée site n'est plus un refus
+  // sec (v1) mais un PÉRIMÈTRE — l'utilisateur voit uniquement les salariés dont
+  // l'affectation principale tombe sur son site. Le salarié seedé n'a AUCUNE
+  // affectation : il reste invisible pour cette portée (anti-élévation conservée).
   const t7 = ((await (await login({ tenantSlug: slug, email: email7, password: GOOD_PASSWORD })).json()) as { token: string }).token;
   const portee = await authed('/employees', t7);
-  assert.equal(portee.status, 403, 'permission présente mais portée site non couvrante (v1) = refus');
+  assert.equal(portee.status, 200, 'portée site = liste bornée au périmètre, pas un refus');
+  const borne = (await portee.json()) as { items: Array<{ matricule: string }> };
+  assert.ok(!borne.items.some((e) => e.matricule === 'E2E-0001'),
+    'un salarié sans affectation dans le périmètre du site reste invisible');
 
   const t1 = ((await (await login({ tenantSlug: slug, email: email1, password: GOOD_PASSWORD })).json()) as { token: string }).token;
   const aucunRole = await authed('/employees', t1);
