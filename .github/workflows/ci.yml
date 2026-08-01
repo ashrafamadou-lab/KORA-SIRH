@@ -144,7 +144,22 @@ jobs:
         run: cd apps/api && npx prisma generate
 
       - name: Build TypeScript strict
-        run: cd apps/api && npx tsc -p tsconfig.json
+        run: |
+          cd apps/api
+          npx tsc -p tsconfig.json
+          test -d dist || { echo '::error::tsc n a rien émis (dist absent)'; exit 1; }
+          echo '--- arborescence émise (contrôle) ---'
+          find dist -type f -name '*.js' | sort
 
       - name: E2E auth (login, sessions, verrouillage atomique, désactivation, audit)
-        run: cd apps/api && node --test dist/apps/api/test/
+        # Auto-localisant : exécute le test e2e compilé où que tsc l ait émis — les
+        # imports relatifs internes au build restent valides quelle que soit la racine.
+        run: |
+          cd apps/api
+          TESTS="$(find dist -type f -name '*.e2e.test.js')"
+          if [ -z "$TESTS" ]; then
+            echo '::error::aucun *.e2e.test.js émis sous dist/ — voir l arborescence du build'
+            exit 1
+          fi
+          echo "tests exécutés : $TESTS"
+          node --test $TESTS

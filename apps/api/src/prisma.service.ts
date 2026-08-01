@@ -28,7 +28,9 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       throw new Error('withTenant : identifiant de tenant invalide');
     }
     return this.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT set_config('app.tenant_id', ${tenantId}, true)`;
+      // $queryRaw (forme SELECT) — $executeRaw est réservé aux ordres sans résultat et
+      // peut rejeter un SELECT selon les versions de Prisma.
+      await tx.$queryRaw`SELECT set_config('app.tenant_id', ${tenantId}, true)`;
       return fn(tx);
     });
   }
