@@ -166,6 +166,14 @@ test('parcours MFA RÉEL : enrôlement TOTP, login exige le code, code accepté 
   const second = await session.login(slug, viewerEmail, P, totp(secret, Math.floor(Date.now() / 1000)));
   assert.equal(second.kind, 'ok');
   assert.equal(session.me!.mfaEnabled, true);
+  // Nettoyage : MFA désactivé pour rendre le compte aux tests suivants
+  // (sinon « compte désactivé » recevrait mfa_required au lieu d'un login franc).
+  const disable = await fetch(`${base}/auth/mfa/disable`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${tabStore.get('kora.session')}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ code: totp(secret, Math.floor(Date.now() / 1000)) }),
+  });
+  assert.equal(disable.status, 200);
   await session.logout();
 });
 
