@@ -343,6 +343,64 @@ export const OPENAPI_SPEC = {
         responses: { '200': { description: '{ revoked: n }' }, '403': err('Permission absente') },
       },
     },
+    '/workflow/definitions': {
+      post: {
+        summary: 'Créer une définition de workflow (draft) — permission workflow.manage',
+        security: bearer,
+        responses: { '201': { description: 'Créée en draft (version auto-incrémentée)' }, '400': err('Définition invalide'), '403': err('Permission absente') },
+      },
+    },
+    '/workflow/definitions/{id}/activate': {
+      post: {
+        summary: 'Activer une définition draft (supersède l’active précédente) — workflow.manage',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: 'Activée' }, '400': err('Non draft'), '404': err('Introuvable') },
+      },
+    },
+    '/workflow/instances': {
+      post: {
+        summary: 'Soumettre une demande dans un workflow — permission workflow.submit',
+        security: bearer,
+        responses: { '201': { description: 'Instance créée, statut pending' }, '400': err('Aucune étape applicable'), '404': err('Aucune définition active') },
+      },
+    },
+    '/workflow/instances/{id}': {
+      get: {
+        summary: 'Consulter une instance et son historique append-only — workflow.view',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: 'Instance + history[]' }, '404': err('Introuvable') },
+      },
+    },
+    '/workflow/instances/{id}/approve': {
+      post: {
+        summary: 'Approuver l’étape courante — workflow.act (acteur assigné, anti-auto-approbation)',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: {
+          '200': { description: 'Avance ou clôt le workflow' },
+          '403': err('Acteur non assigné ou séparation des tâches'),
+          '404': err('Introuvable'),
+          '409': err('Instance déjà avancée (concurrence — code=stale)'),
+        },
+      },
+    },
+    '/workflow/instances/{id}/reject': {
+      post: { summary: 'Rejeter — workflow.act', security: bearer, parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Rejetée' }, '403': err('Non autorisé'), '409': err('Déjà avancée') } },
+    },
+    '/workflow/instances/{id}/return': {
+      post: { summary: 'Retourner au demandeur — workflow.act', security: bearer, parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Retournée' }, '403': err('Non autorisé') } },
+    },
+    '/workflow/instances/{id}/cancel': {
+      post: { summary: 'Annuler (demandeur ou acteur assigné) — workflow.act', security: bearer, parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Annulée' }, '403': err('Non autorisé') } },
+    },
+    '/workflow/instances/{id}/delegate': {
+      post: { summary: 'Déléguer l’étape courante à un utilisateur — workflow.act', security: bearer, parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Déléguée' }, '403': err('Non assigné') } },
+    },
+    '/workflow/tick': {
+      post: { summary: 'Balayer les échéances (relances + escalades) — workflow.manage', security: bearer, responses: { '200': { description: '{ reminded, escalated }' } } },
+    },
     '/openapi.json': {
       get: { summary: 'Cette spécification', responses: { '200': { description: 'OpenAPI 3.0.3' } } },
     },
