@@ -3,6 +3,8 @@
  * La liste de compromission embarquée est un socle minimal ; la vérification contre une
  * base étendue (type HIBP hors-ligne) est un raffinement prévu côté API.
  */
+import { createHash } from 'node:crypto';
+
 export interface PasswordPolicy {
   minLength: number;
   /** Nombre minimal de classes de caractères parmi : minuscules, majuscules, chiffres, symboles. */
@@ -35,6 +37,16 @@ export const DEFAULT_PASSWORD_POLICY: PasswordPolicy = {
   minCharClasses: 3,
   denylist: COMMON_PASSWORDS,
 };
+
+/**
+ * Découpe k-anonymat façon HIBP : SHA-1 hex majuscule → préfixe de 5 (envoyé au
+ * service distant) + suffixe de 35 (comparé localement). Le mot de passe complet ne
+ * quitte jamais le processus. Pur : utilisé par le fournisseur « hibp » de l'API.
+ */
+export function hibpDigest(password: string): { prefix: string; suffix: string } {
+  const sha1 = createHash('sha1').update(password, 'utf8').digest('hex').toUpperCase();
+  return { prefix: sha1.slice(0, 5), suffix: sha1.slice(5) };
+}
 
 export function checkPassword(
   password: string,

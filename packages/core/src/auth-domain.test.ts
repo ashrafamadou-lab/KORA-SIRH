@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkPassword } from './password-policy.ts';
+import { checkPassword, hibpDigest } from './password-policy.ts';
 import { DEFAULT_LOCKOUT_POLICY, isLocked, lockDelaySeconds, lockedUntilMs } from './lockout.ts';
 import {
   hashSessionToken,
@@ -79,4 +79,13 @@ test('sessionStatus : active / révoquée / expirée / inactivité', () => {
   assert.equal(sessionStatus({ ...base, revokedAtMs: 95_000 }, 100_000, idleMax), 'revoked');
   assert.equal(sessionStatus(base, 200_000, idleMax), 'expired');
   assert.equal(sessionStatus(base, 190_000, idleMax), 'idle_timeout', '100 s sans activité > 60 s');
+});
+
+test('hibpDigest : découpe k-anonymat conforme (vecteur SHA-1 connu)', () => {
+  // sha1('password') = 5BAA61E4C9B93F3F0682250B6CF8331B7EE68FD8
+  const { prefix, suffix } = hibpDigest('password');
+  assert.equal(prefix, '5BAA6');
+  assert.equal(suffix, '1E4C9B93F3F0682250B6CF8331B7EE68FD8');
+  assert.equal(prefix.length, 5);
+  assert.equal(suffix.length, 35);
 });

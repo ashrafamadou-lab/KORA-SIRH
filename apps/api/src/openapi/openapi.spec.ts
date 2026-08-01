@@ -220,6 +220,59 @@ export const OPENAPI_SPEC = {
         },
       },
     },
+    '/auth/sessions': {
+      get: {
+        summary: 'Mes sessions actives (métadonnées seulement — jamais de jeton)',
+        security: bearer,
+        responses: { '200': { description: 'Liste des sessions actives' }, '401': err('Session invalide') },
+      },
+    },
+    '/auth/sessions/{id}': {
+      delete: {
+        summary: 'Révoquer une de mes sessions',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: {
+          '204': { description: 'Révoquée' },
+          '400': err('Identifiant invalide'),
+          '404': err('Session introuvable (ou n’appartenant pas à l’utilisateur)'),
+        },
+      },
+    },
+    '/auth/sessions/revoke-others': {
+      post: {
+        summary: 'Révoquer toutes mes autres sessions (garde la courante)',
+        security: bearer,
+        responses: { '200': { description: '{ revoked: n }' }, '401': err('Session invalide') },
+      },
+    },
+    '/auth/password': {
+      post: {
+        summary: 'Changer mon mot de passe (ancien vérifié, autres sessions révoquées)',
+        security: bearer,
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['currentPassword', 'newPassword'],
+                properties: {
+                  currentPassword: { type: 'string', maxLength: 512 },
+                  newPassword: { type: 'string', maxLength: 512 },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          '200': { description: 'Changé, autres sessions révoquées' },
+          '400': err('Politique non respectée (issues[]) ou mot de passe compromis (code=breached)'),
+          '401': err('Mot de passe actuel incorrect'),
+          '503': err('Vérification de compromission indisponible (mode fail-closed)'),
+        },
+      },
+    },
     '/employees': {
       get: {
         summary: 'Liste des salariés (permission employees.view, bornée RLS au tenant)',
@@ -234,6 +287,60 @@ export const OPENAPI_SPEC = {
           '401': err('Session invalide'),
           '403': err('Permission absente ou portée non couvrante (anti-élévation)'),
         },
+      },
+    },
+    '/admin/users': {
+      get: {
+        summary: 'Lister les comptes (permission users.view)',
+        security: bearer,
+        responses: { '200': { description: 'Comptes du tenant' }, '403': err('Permission absente') },
+      },
+      post: {
+        summary: 'Créer un compte (permission users.create ; politique + compromission)',
+        security: bearer,
+        responses: {
+          '201': { description: 'Créé' },
+          '400': err('Email/mot de passe invalide, ou compromis'),
+          '403': err('Permission absente'),
+          '409': err('Email déjà utilisé'),
+          '503': err('Compromission indisponible (fail-closed)'),
+        },
+      },
+    },
+    '/admin/users/{id}/activate': {
+      post: {
+        summary: 'Activer un compte (permission users.edit)',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: 'Activé' }, '403': err('Permission absente'), '404': err('Introuvable') },
+      },
+    },
+    '/admin/users/{id}/deactivate': {
+      post: {
+        summary: 'Désactiver un compte — révoque toutes ses sessions (permission users.edit)',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ sessionsRevoked: n }' }, '403': err('Permission absente') },
+      },
+    },
+    '/admin/users/{id}/roles': {
+      post: {
+        summary: 'Affecter des rôles — borné aux permissions de l’acteur (permission users.manage_roles)',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: {
+          '200': { description: 'Affectés' },
+          '400': err('Rôles inconnus'),
+          '403': err('Permission absente, ou délégation refusée (escalade — permissions[])'),
+        },
+      },
+    },
+    '/admin/users/{id}/revoke-sessions': {
+      post: {
+        summary: 'Révoquer administrativement toutes les sessions d’un compte (permission sessions.revoke)',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ revoked: n }' }, '403': err('Permission absente') },
       },
     },
     '/openapi.json': {
