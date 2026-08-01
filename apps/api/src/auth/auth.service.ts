@@ -7,10 +7,17 @@ import type { Prisma } from '@prisma/client';
 import * as argon2 from 'argon2';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma.service';
+import { MfaService } from './mfa.service';
+import { auditAuth, type AuthAuditEntry } from './audit.util';
 import {
   DEFAULT_LOCKOUT_POLICY,
   isLocked,
 } from '../../../../packages/core/src/lockout.ts';
+import {
+  hit,
+  prune,
+  type RateLimitState,
+} from '../../../../packages/core/src/rate-limit.ts';
 import {
   hashSessionToken,
   mintSessionToken,
@@ -22,10 +29,26 @@ const ABSOLUTE_TTL_HOURS = 12;
 const IDLE_MAX_SECONDS = 30 * 60;
 const GENERIC_MESSAGE = 'identifiants invalides';
 
+// Limitation de débit du login (revue sponsor / US-E1-01) : fenêtre glissante en
+// mémoire du processus — v1 monolithe mono-instance, état Redis prévu au passage
+// multi-instances. Deux dimensions : identité ciblée et IP globale. Les 429 ne sont
+// pas audités en base (pas d'écriture amplifiable par un marteau réseau) ; les
+// tentatives qui atteignent la vérification restent auditées comme login_failed.
+const RATE_STATE: RateLimitState = new Map();
+const IDENTITY_RATE = {
+  windowMs: Number(process.env.KORA_LOGIN_RATE_WINDOW_MS ?? 60_000),
+  max: Number(process.env.KORA_LOGIN_RATE_IDENTITY_MAX ?? 10),
+};
+const IP_RATE = {
+  windowMs: Number(process.env.KORA_LOGIN_RATE_WINDOW_MS ?? 60_000),
+  max: Number(process.env.KORA_LOGIN_RATE_IP_MAX ?? 100),
+};
+
 export interface LoginInput {
   tenantSlug: string;
   email: string;
   password: string;
+  mfaCode?: string | null;
   ip?: string | null;
   userAgent?: string | null;
 }
@@ -49,6 +72,8 @@ interface UserRow {
   is_active: boolean;
   failed_login_count: number;
   locked_until: Date | null;
+  mfa_enabled: boolean;
+  mfa_secret_enc: string | null;
 }
 
 /**
@@ -61,6 +86,7 @@ interface UserRow {
 type LoginOutcome =
   | { kind: 'success'; result: LoginResult }
   | { kind: 'invalid_credentials' }
+  | { kind: 'mfa_required' }
   | { kind: 'locked'; retryAfterSeconds: number };
 
 type AuthenticateOutcome =
@@ -75,9 +101,36 @@ export class AuthService {
     type: argon2.argon2id,
   });
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly mfa: MfaService,
+  ) {}
 
   async login(input: LoginInput): Promise<LoginResult> {
+    // Limitation de débit AVANT toute transaction — lever ici est sûr (aucune écriture).
+    const now = Date.now();
+    if (RATE_STATE.size > 10_000) prune(RATE_STATE, now, IP_RATE);
+    const identityVerdict = hit(
+      RATE_STATE,
+      `id|${input.ip ?? '?'}|${input.tenantSlug}|${input.email}`.toLowerCase(),
+      now,
+      IDENTITY_RATE,
+    );
+    const ipVerdict = hit(RATE_STATE, `ip|${input.ip ?? '?'}`, now, IP_RATE);
+    if (!identityVerdict.allowed || !ipVerdict.allowed) {
+      throw new HttpException(
+        {
+          statusCode: 429,
+          message: 'trop de tentatives — réessayer plus tard',
+          retryAfterSeconds: Math.max(
+            identityVerdict.retryAfterSeconds,
+            ipVerdict.retryAfterSeconds,
+          ),
+        },
+        429,
+      );
+    }
+
     const tenantId = await this.prisma.resolveTenant(input.tenantSlug);
     if (!tenantId) {
       await this.burnTime(input.password);
@@ -86,7 +139,8 @@ export class AuthService {
 
     const outcome = await this.prisma.withTenant<LoginOutcome>(tenantId, async (tx) => {
       const rows = await tx.$queryRaw<UserRow[]>`
-        SELECT id, password_hash, is_active, failed_login_count, locked_until
+        SELECT id, password_hash, is_active, failed_login_count, locked_until,
+               mfa_enabled, mfa_secret_enc
           FROM admin.users
          WHERE email = ${input.email} AND deleted_at IS NULL`;
       const user = rows[0];
@@ -120,24 +174,7 @@ export class AuthService {
       // Enrôlement / vérification / récupération / désactivation : tranche suivante.
       const valid = await argon2.verify(user.password_hash, input.password).catch(() => false);
       if (!valid) {
-        // Incrément ATOMIQUE : UPDATE relatif — deux échecs concurrents se sérialisent
-        // sur le verrou de ligne, aucun compte perdu. Politique (seuil 5, 30 s × 2^n,
-        // plafond 900 s) = DEFAULT_LOCKOUT_POLICY, injectée en paramètres du CASE.
-        const p = DEFAULT_LOCKOUT_POLICY;
-        const updated = await tx.$queryRaw<Array<{ failed_login_count: number }>>`
-          UPDATE admin.users
-             SET failed_login_count = failed_login_count + 1,
-                 locked_until = CASE
-                   WHEN failed_login_count + 1 >= ${p.threshold}::int THEN
-                     now() + make_interval(secs => LEAST(
-                       ${p.baseSeconds}::float8
-                         * power(${p.factor}::float8, failed_login_count + 1 - ${p.threshold}::int),
-                       ${p.maxSeconds}::float8))
-                   ELSE locked_until
-                 END
-           WHERE id = ${user.id}::uuid
-           RETURNING failed_login_count`;
-        const failedCount = updated[0]?.failed_login_count ?? user.failed_login_count + 1;
+        const failedCount = await this.registerFailedAttempt(tx, user.id, user.failed_login_count);
         await this.audit(tx, tenantId, {
           action: 'login_failed',
           actorUserId: user.id,
@@ -145,6 +182,36 @@ export class AuthService {
           reason: `bad_password_${failedCount}`,
         });
         return { kind: 'invalid_credentials' };
+      }
+
+      // Second facteur (US-E1-02) : exigé si activé — un mot de passe juste sans code
+      // ne divulgue rien de plus que « code requis » et n'ouvre JAMAIS de session.
+      if (user.mfa_enabled && user.mfa_secret_enc) {
+        if (!input.mfaCode) {
+          await this.audit(tx, tenantId, {
+            action: 'login_failed',
+            actorUserId: user.id,
+            recordId: input.email,
+            reason: 'mfa_required',
+          });
+          return { kind: 'mfa_required' };
+        }
+        const mfaOk = await this.mfa.verifyForLogin(
+          tx,
+          tenantId,
+          { id: user.id, secretEnc: user.mfa_secret_enc },
+          input.mfaCode,
+        );
+        if (!mfaOk) {
+          const failedCount = await this.registerFailedAttempt(tx, user.id, user.failed_login_count);
+          await this.audit(tx, tenantId, {
+            action: 'login_failed',
+            actorUserId: user.id,
+            recordId: input.email,
+            reason: `bad_mfa_${failedCount}`,
+          });
+          return { kind: 'invalid_credentials' };
+        }
       }
 
       await tx.$executeRaw`
@@ -181,6 +248,11 @@ export class AuthService {
     switch (outcome.kind) {
       case 'success':
         return outcome.result;
+      case 'mfa_required':
+        throw new HttpException(
+          { statusCode: 401, message: 'code MFA requis', code: 'mfa_required' },
+          401,
+        );
       case 'locked':
         throw new HttpException(
           {
@@ -194,6 +266,34 @@ export class AuthService {
       default:
         throw new UnauthorizedException(GENERIC_MESSAGE);
     }
+  }
+
+  /**
+   * Incrément ATOMIQUE du compteur d'échecs : UPDATE relatif — deux échecs concurrents
+   * se sérialisent sur le verrou de ligne, aucun compte perdu. Politique (seuil 5,
+   * 30 s × 2^n, plafond 900 s) = DEFAULT_LOCKOUT_POLICY, injectée en paramètres du CASE.
+   * Partagé entre échec mot de passe et échec MFA.
+   */
+  private async registerFailedAttempt(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    knownCount: number,
+  ): Promise<number> {
+    const p = DEFAULT_LOCKOUT_POLICY;
+    const updated = await tx.$queryRaw<Array<{ failed_login_count: number }>>`
+      UPDATE admin.users
+         SET failed_login_count = failed_login_count + 1,
+             locked_until = CASE
+               WHEN failed_login_count + 1 >= ${p.threshold}::int THEN
+                 now() + make_interval(secs => LEAST(
+                   ${p.baseSeconds}::float8
+                     * power(${p.factor}::float8, failed_login_count + 1 - ${p.threshold}::int),
+                   ${p.maxSeconds}::float8))
+               ELSE locked_until
+             END
+       WHERE id = ${userId}::uuid
+       RETURNING failed_login_count`;
+    return updated[0]?.failed_login_count ?? knownCount + 1;
   }
 
   /** Valide un jeton et retourne le contexte — utilisé par SessionGuard sur chaque requête. */
@@ -291,11 +391,8 @@ export class AuthService {
   private async audit(
     tx: Prisma.TransactionClient,
     tenantId: string,
-    entry: { action: string; actorUserId?: string; recordId?: string; reason?: string },
+    entry: AuthAuditEntry,
   ): Promise<void> {
-    await tx.$executeRaw`
-      INSERT INTO audit.audit_log (tenant_id, actor_user_id, action, module, record_type, record_id, reason)
-      VALUES (${tenantId}::uuid, ${entry.actorUserId ?? null}::uuid, ${entry.action},
-              'auth', 'user', ${entry.recordId ?? null}, ${entry.reason ?? null})`;
+    await auditAuth(tx, tenantId, entry);
   }
 }
