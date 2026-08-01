@@ -13,6 +13,7 @@ import {
 import { AuthService, type LoginResult } from './auth.service';
 import { MfaService } from './mfa.service';
 import { SessionGuard, type AuthenticatedRequest } from './session.guard';
+import { PrismaService } from '../prisma.service';
 
 function requireString(value: unknown, field: string, maxLength: number): string {
   if (typeof value !== 'string' || value.length === 0 || value.length > maxLength) {
@@ -38,6 +39,7 @@ export class AuthController {
   constructor(
     private readonly auth: AuthService,
     private readonly mfa: MfaService,
+    private readonly prisma: PrismaService,
   ) {}
 
   @Post('login')
@@ -61,10 +63,42 @@ export class AuthController {
     });
   }
 
+  /**
+   * Profil de session ENRICHI (E7) : permissions et portées RÉELLES (source de vérité
+   * de la navigation PWA — l'affichage n'est jamais un contrôle de sécurité, chaque
+   * route API garde ses propres gardes), identité du tenant et langue préférée.
+   */
   @Get('me')
   @UseGuards(SessionGuard)
-  me(@Req() req: AuthenticatedRequest): NonNullable<AuthenticatedRequest['authCtx']> {
-    return req.authCtx!;
+  async me(@Req() req: AuthenticatedRequest): Promise<Record<string, unknown>> {
+    const a = req.authCtx!;
+    return this.prisma.withTenant(a.tenantId, async (tx) => {
+      const perms = await tx.$queryRaw<Array<{ permission_key: string }>>`
+        SELECT DISTINCT rp.permission_key FROM admin.user_roles ur
+          JOIN admin.role_permissions rp ON rp.role_id = ur.role_id
+         WHERE ur.user_id = ${a.userId}::uuid ORDER BY rp.permission_key`;
+      const scopes = await tx.$queryRaw<Array<{ scope_type: string; scope_ref: string | null }>>`
+        SELECT scope_type, scope_ref FROM admin.user_scopes WHERE user_id = ${a.userId}::uuid`;
+      const roles = await tx.$queryRaw<Array<{ key: string; name: string }>>`
+        SELECT r.key, r.name FROM admin.user_roles ur JOIN admin.roles r ON r.id = ur.role_id
+         WHERE ur.user_id = ${a.userId}::uuid ORDER BY r.key`;
+      const user = await tx.$queryRaw<Array<{ locale: string | null; mfa_enabled: boolean }>>`
+        SELECT locale, mfa_enabled FROM admin.users WHERE id = ${a.userId}::uuid`;
+      const tenant = await tx.$queryRaw<Array<{ slug: string; name: string }>>`
+        SELECT slug, name FROM admin.tenants WHERE id = ${a.tenantId}::uuid`;
+      return {
+        tenantId: a.tenantId,
+        userId: a.userId,
+        sessionId: a.sessionId,
+        email: a.email,
+        permissions: perms.map((p) => p.permission_key),
+        scopes: scopes.map((s) => ({ type: s.scope_type, ref: s.scope_ref })),
+        roles,
+        locale: user[0]?.locale ?? 'fr',
+        mfaEnabled: user[0]?.mfa_enabled ?? false,
+        tenant: tenant[0] ?? null,
+      };
+    });
   }
 
   @Post('logout')

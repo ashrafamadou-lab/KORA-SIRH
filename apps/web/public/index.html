@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <!-- CSP stricte : aucun script/style inline, aucune origine externe, aucune donnée
+       incorporée hors data: pour les images. Le frontend ne rend jamais de HTML non
+       contrôlé (rendu textContent uniquement). -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="theme-color" content="#0e1420" />
+  <meta name="description" content="KORA — SIRH d'entreprise multi-tenant" />
+  <title>KORA</title>
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" href="./icons/icon-192.png" type="image/png" />
+  <link rel="apple-touch-icon" href="./icons/icon-192.png" />
+  <link rel="stylesheet" href="./theme.css" />
+</head>
+<body>
+  <div id="app"></div>
+  <script type="module" src="./app/main.js"></script>
+</body>
+</html>

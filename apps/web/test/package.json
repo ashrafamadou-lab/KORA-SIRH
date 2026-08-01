@@ -1,0 +1,4 @@
+{
+  "type": "module",
+  "//": "Marqueur ESM pour node --test sur les fichiers .ts (type stripping). Hors workspaces npm (apps/* ne descend pas ici) — lockfile racine inchangé."
+}

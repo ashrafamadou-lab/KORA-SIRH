@@ -531,6 +531,12 @@ export const OPENAPI_SPEC = {
         security: bearer,
         responses: { '201': { description: 'Instance créée, statut pending' }, '400': err('Aucune étape applicable'), '404': err('Aucune définition active') },
       },
+      get: {
+        summary: 'Boîtes de travail (E7) — inbox : instances décidables par l’acteur (même règle que decide, séparation des tâches incluse) ; outbox : ses demandes — workflow.view',
+        description: 'La liste n’accorde AUCUN droit : chaque action repasse par decide() sous verrou. Paramètres : box=inbox|outbox, status?, limit (≤200), offset.',
+        security: bearer,
+        responses: { '200': { description: '{ items[], box }' }, '400': err('Paramètre invalide'), '403': err('Permission absente') },
+      },
     },
     '/workflow/instances/{id}': {
       get: {
@@ -920,6 +926,14 @@ export const OPENAPI_SPEC = {
           'Les références se résolvent PAR CODE dans le tenant courant : aucune référence croisée inter-tenant possible.',
         security: bearer,
         responses: { '200': { description: '{ mode, counts } (preview valide ou import appliqué)' }, '422': err('Rapport d’erreurs par ligne — aucune écriture') },
+      },
+    },
+    '/admin/roles': {
+      get: {
+        summary: 'Catalogue des rôles du tenant avec leurs permissions — users.view, LECTURE seule',
+        description: 'L’affectation reste bornée aux permissions de l’acteur (anti-élévation) par POST /admin/users/{id}/roles.',
+        security: bearer,
+        responses: { '200': { description: '[{ id, key, name, isSystem, permissions[] }]' }, '403': err('Permission absente') },
       },
     },
     '/openapi.json': {

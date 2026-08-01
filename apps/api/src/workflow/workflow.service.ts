@@ -370,6 +370,71 @@ export class WorkflowService {
   }
 
   /**
+   * Boîtes de travail (E7) : « inbox » = instances EN ATTENTE dont l'étape courante est
+   * réellement décidable par l'acteur (même règle que decide : assignation + séparation
+   * des tâches — jamais ses propres demandes) ; « outbox » = ses demandes, tout statut.
+   * La liste n'accorde AUCUN droit : chaque action repasse par decide() sous verrou.
+   */
+  async listInstances(
+    tenantId: string,
+    actor: ActorIdentity,
+    opts: { box: 'inbox' | 'outbox'; status?: string; limit: number; offset: number },
+  ): Promise<Array<Record<string, unknown>>> {
+    return this.prisma.withTenant(tenantId, async (tx) => {
+      if (opts.box === 'outbox') {
+        return tx.$queryRaw<Array<Record<string, unknown>>>`
+          SELECT i.id, i.definition_key AS "definitionKey", i.status,
+                 i.current_step_index AS "currentStepIndex",
+                 i.steps_snapshot -> i.current_step_index ->> 'name' AS "stepName",
+                 i.subject_type AS "subjectType", i.subject_id AS "subjectId",
+                 i.created_by AS "createdBy", i.created_at AS "createdAt",
+                 i.step_deadline AS "stepDeadline", i.revision
+            FROM workflow.instances i
+           WHERE i.created_by = ${actor.userId}::uuid
+             AND (${opts.status ?? null}::text IS NULL OR i.status = ${opts.status ?? null})
+           ORDER BY i.created_at DESC
+           LIMIT ${opts.limit} OFFSET ${opts.offset}`;
+      }
+      // Inbox : borne défensive puis filtrage par la MÊME règle d'autorisation que decide.
+      const pending = await tx.$queryRaw<Array<{
+        id: string; definition_key: string; status: string; current_step_index: number;
+        steps_snapshot: WorkflowStepDef[]; context: WorkflowContext; created_by: string;
+        delegated_to_user_id: string | null; subject_type: string; subject_id: string;
+        created_at: Date; step_deadline: Date | null; revision: number;
+      }>>`
+        SELECT id, definition_key, status, current_step_index, steps_snapshot, context,
+               created_by, delegated_to_user_id, subject_type, subject_id, created_at,
+               step_deadline, revision
+          FROM workflow.instances
+         WHERE status = 'pending'
+         ORDER BY created_at DESC
+         LIMIT 500`;
+      const me = this.toActor(actor);
+      const mine = pending.filter((i) => {
+        const step = i.steps_snapshot[i.current_step_index];
+        if (!step) return false;
+        return canDecide(me, {
+          step, instanceContext: i.context, createdBy: i.created_by,
+          delegatedToUserId: i.delegated_to_user_id,
+        }).allowed;
+      });
+      return mine.slice(opts.offset, opts.offset + opts.limit).map((i) => ({
+        id: i.id,
+        definitionKey: i.definition_key,
+        status: i.status,
+        currentStepIndex: i.current_step_index,
+        stepName: i.steps_snapshot[i.current_step_index]?.name ?? null,
+        subjectType: i.subject_type,
+        subjectId: i.subject_id,
+        createdBy: i.created_by,
+        createdAt: i.created_at,
+        stepDeadline: i.step_deadline,
+        revision: i.revision,
+      }));
+    });
+  }
+
+  /**
    * Balayage des échéances (relances + escalades). Appelé par un déclencheur planifié en
    * production ; ici exposé comme opération pour être testable. Émet des transitions
    * 'remind' (à reminder_hours) et 'escalate'/'expired' (à échéance dépassée).

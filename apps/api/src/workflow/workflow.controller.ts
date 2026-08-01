@@ -8,6 +8,7 @@ import {
   HttpException,
   Param,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -101,6 +102,30 @@ export class WorkflowController {
     if (outcome.kind === 'no_active_definition') throw new HttpException('aucune définition active pour cette clé', 404);
     if (outcome.kind === 'empty_workflow') throw new BadRequestException('aucune étape applicable au contexte');
     return { instanceId: outcome.instanceId, status: outcome.status, currentStepIndex: outcome.currentStepIndex };
+  }
+
+  /** Boîtes de travail (E7) : inbox = à décider par MOI ; outbox = mes demandes. */
+  @Get('instances')
+  @RequirePermission('workflow.view')
+  async listInstances(
+    @Query('box') box: string | undefined,
+    @Query('status') status: string | undefined,
+    @Query('limit') limit: string | undefined,
+    @Query('offset') offset: string | undefined,
+    @Req() req: AuthenticatedRequest,
+  ): Promise<{ items: unknown[]; box: string }> {
+    const a = req.authCtx!;
+    const b = box ?? 'inbox';
+    if (b !== 'inbox' && b !== 'outbox') throw new BadRequestException('box : inbox ou outbox');
+    if (status !== undefined && !['pending', 'approved', 'rejected', 'returned', 'cancelled', 'expired'].includes(status)) {
+      throw new BadRequestException('status inconnu');
+    }
+    const lim = Math.min(Math.max(Number(limit ?? 50) || 50, 1), 200);
+    const off = Math.max(Number(offset ?? 0) || 0, 0);
+    const items = await this.wf.listInstances(a.tenantId, await this.actor(req), {
+      box: b, status, limit: lim, offset: off,
+    });
+    return { items, box: b };
   }
 
   @Get('instances/:id')

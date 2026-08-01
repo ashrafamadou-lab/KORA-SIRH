@@ -1,0 +1,4 @@
+{
+  "type": "module",
+  "//": "Marqueur de format ESM pour l'exécution directe des sources par node (type stripping). PAS un paquet npm : hors de la portée des workspaces (apps/* ne descend pas ici) — le lockfile racine reste inchangé."
+}

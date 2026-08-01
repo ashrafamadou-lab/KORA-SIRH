@@ -165,3 +165,67 @@ jobs:
           fi
           echo "tests exécutés : $TESTS"
           node --test $TESTS
+
+  web:
+    # PWA KORA (E7) — AUCUNE dépendance nouvelle : apps/web est hors workspaces npm
+    # (pas de package.json de paquet), le lockfile racine reste inchangé ; le build est
+    # tsc + node pur. Le job compile l'API pour exécuter l'intégration RÉELLE
+    # frontend ↔ API (connexion, MFA TOTP, permissions, révocation immédiate).
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL_MIGRATOR: postgres://kora_migrator:kora_migrator_dev@127.0.0.1:5432/kora
+      DATABASE_URL_APP: postgres://kora_app:kora_app_dev@127.0.0.1:5432/kora
+      PGPASSWORD: postgres
+      KORA_MFA_KEY: a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '>=22.18 <23'
+
+      - name: Créer les rôles et la base
+        run: |
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE kora_migrator LOGIN PASSWORD 'kora_migrator_dev'" \
+            -c "CREATE ROLE kora_app LOGIN PASSWORD 'kora_app_dev' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS" \
+            -c "CREATE DATABASE kora OWNER kora_migrator"
+
+      - name: Migrations
+        run: bash infra/db/migrate.sh
+
+      - name: Dépendances (npm ci strict — lockfile INCHANGÉ par E7)
+        run: npm ci --no-audit --no-fund
+
+      - name: Client Prisma + build API (nécessaire à l'intégration réelle)
+        run: |
+          cd apps/api
+          npx prisma generate
+          npx tsc -p tsconfig.json
+
+      - name: Build PWA (tsc strict + coquille + icônes + service worker assemblé)
+        run: node apps/web/scripts/build.mjs
+
+      - name: Tests web (lint maison, i18n FR/EN, contrat OpenAPI, cache, a11y, client, intégration réelle)
+        run: |
+          cd apps/web
+          node --test test/*.test.ts
+
+      - name: Artefact PWA (coquille construite, preuve d'installabilité)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: kora-pwa-dist-${{ github.sha }}
+          path: apps/web/dist/
+          if-no-files-found: error
