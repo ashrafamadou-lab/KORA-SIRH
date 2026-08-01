@@ -46,6 +46,14 @@ export type ActOutcome =
   | { kind: 'forbidden'; reason: string }
   | { kind: 'invalid'; reason: string };
 
+/** Effet métier enregistré par un module consommateur (E4 Config, E8 Organisation…). */
+export type SubjectHandler = (
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  subjectId: string,
+  status: string,
+) => Promise<void>;
+
 interface InstanceRow {
   id: string;
   status: WorkflowStatus;
@@ -69,10 +77,18 @@ interface InstanceRow {
  */
 @Injectable()
 export class WorkflowService {
+  /** Gestionnaires de sujet enregistrés par les modules consommateurs (anti-cycle DI). */
+  private readonly subjectHandlers = new Map<string, SubjectHandler>();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly notify: NotificationService,
   ) {}
+
+  /** Un module métier branche ici l'effet à l'atteinte d'un état (approved/rejected/cancelled). */
+  registerSubjectHandler(subjectType: string, handler: SubjectHandler): void {
+    this.subjectHandlers.set(subjectType, handler);
+  }
 
   // ---------- Définitions ----------
 
@@ -162,7 +178,7 @@ export class WorkflowService {
       await this.appendTransition(tx, tenantId, instanceId, 1, {
         action: 'submit', fromStatus: null, toStatus: 'pending', stepIndex: firstIndex, actorUserId,
       });
-      await this.syncSubject(tx, input.subjectType, input.subjectId, 'pending');
+      await this.syncSubject(tx, tenantId, input.subjectType, input.subjectId, 'pending');
       // E5 : notification aux approbateurs de la première étape (même transaction).
       await this.notify.notifyWorkflowEventTx(tx, tenantId, {
         kind: 'step_pending', instanceId, transitionSeq: 1, requesterId: actorUserId,
@@ -242,8 +258,8 @@ export class WorkflowService {
         stepIndex: inst.current_step_index, actorUserId: actor.userId,
         comment: opts.comment, attachments: opts.attachments,
       });
-      if (transition.nextStatus === 'approved') await this.syncSubject(tx, inst.subject_type, inst.subject_id, 'approved');
-      if (transition.nextStatus === 'rejected') await this.syncSubject(tx, inst.subject_type, inst.subject_id, 'rejected');
+      if (transition.nextStatus === 'approved') await this.syncSubject(tx, tenantId, inst.subject_type, inst.subject_id, 'approved');
+      if (transition.nextStatus === 'rejected') await this.syncSubject(tx, tenantId, inst.subject_type, inst.subject_id, 'rejected');
 
       // E5 : décision finale → notifier le DEMANDEUR ; étape suivante → notifier ses APPROBATEURS.
       if (transition.nextStatus === 'approved' || transition.nextStatus === 'rejected' || transition.nextStatus === 'returned') {
@@ -301,7 +317,7 @@ export class WorkflowService {
         action: 'cancel', fromStatus: inst.status, toStatus: 'cancelled',
         stepIndex: inst.current_step_index, actorUserId: actor.userId, comment: opts.comment,
       });
-      await this.syncSubject(tx, inst.subject_type, inst.subject_id, 'cancelled');
+      await this.syncSubject(tx, tenantId, inst.subject_type, inst.subject_id, 'cancelled');
       await this.notify.notifyWorkflowEventTx(tx, tenantId, {
         kind: 'cancelled', instanceId, transitionSeq: seq, requesterId: inst.created_by,
         definitionKey: inst.definition_key, subjectType: inst.subject_type, subjectId: inst.subject_id,
@@ -476,8 +492,13 @@ export class WorkflowService {
    * Center (le lien E3→E4 du contreseing).
    */
   private async syncSubject(
-    tx: Prisma.TransactionClient, subjectType: string, subjectId: string, status: string,
+    tx: Prisma.TransactionClient, tenantId: string, subjectType: string, subjectId: string, status: string,
   ): Promise<void> {
+    const handler = this.subjectHandlers.get(subjectType);
+    if (handler) {
+      await handler(tx, tenantId, subjectId, status);
+      return;
+    }
     if (subjectType === 'demo_request') {
       await tx.$executeRaw`
         UPDATE workflow.demo_requests SET status = ${status} WHERE id = ${subjectId}::uuid`;

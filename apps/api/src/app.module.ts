@@ -8,10 +8,11 @@ import { WorkflowModule } from './workflow/workflow.module';
 import { ConfigModule } from './config/config.module';
 import { NotifyModule } from './notify/notify.module';
 import { AuditModule } from './audit/audit.module';
+import { OrgModule } from './org/org.module';
 import { OpenapiController } from './openapi/openapi.controller';
 
 @Module({
-  imports: [PrismaModule, AuthModule, EmployeesModule, AdminModule, WorkflowModule, ConfigModule, NotifyModule, AuditModule],
+  imports: [PrismaModule, AuthModule, EmployeesModule, AdminModule, WorkflowModule, ConfigModule, NotifyModule, AuditModule, OrgModule],
   controllers: [HealthController, OpenapiController],
 })
 export class AppModule {}

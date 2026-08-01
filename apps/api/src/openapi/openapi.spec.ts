@@ -678,6 +678,83 @@ export const OPENAPI_SPEC = {
         responses: { '200': { description: '{ count, items[] }' }, '403': err('Permission audit.export requise') },
       },
     },
+    '/org/companies': {
+      post: { summary: 'Créer une société/entité juridique DANS le tenant (code unique, libellés FR/EN) — org.manage, audité', security: bearer, responses: { '201': { description: '{ id }' }, '400': err('Entrée invalide'), '409': err('Code déjà utilisé (code=duplicate_code)') } },
+      get: { summary: 'Lister/rechercher les sociétés (query, status, limit, offset) — org.view', security: bearer, responses: { '200': { description: 'Sociétés du tenant' } } },
+    },
+    '/org/sites': {
+      post: { summary: 'Créer un site/établissement rattaché à une société — org.manage, audité', security: bearer, responses: { '201': { description: '{ id }' }, '400': err('Référence introuvable'), '409': err('Code déjà utilisé') } },
+      get: { summary: 'Lister/rechercher les sites — org.view', security: bearer, responses: { '200': { description: 'Sites du tenant' } } },
+    },
+    '/org/cost-centers': {
+      post: { summary: 'Créer un centre de coûts — org.manage, audité', security: bearer, responses: { '201': { description: '{ id }' }, '409': err('Code déjà utilisé') } },
+      get: { summary: 'Lister/rechercher les centres de coûts — org.view', security: bearer, responses: { '200': { description: 'Centres de coûts' } } },
+    },
+    '/org/jobs': {
+      post: { summary: 'Créer un emploi générique — org.manage, audité', security: bearer, responses: { '201': { description: '{ id }' }, '409': err('Code déjà utilisé') } },
+      get: { summary: 'Lister/rechercher les emplois — org.view', security: bearer, responses: { '200': { description: 'Emplois' } } },
+    },
+    '/org/units': {
+      post: { summary: 'Créer une unité (direction/département/service/unité/équipe), parent daté optionnel — org.manage, audité', security: bearer, responses: { '201': { description: '{ id }' }, '400': err('unit_type ou parent invalide'), '409': err('Code déjà utilisé') } },
+      get: { summary: 'Lister/rechercher les unités (type, status, date pour le parent applicable) — org.view', security: bearer, responses: { '200': { description: 'Unités + parent applicable à la date' } } },
+    },
+    '/org/units/{id}': {
+      get: { summary: 'Détail d’une unité + HISTORIQUE complet de ses rattachements datés — org.view', security: bearer, parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Unité + parentHistory[]' }, '404': err('Introuvable') } },
+    },
+    '/org/units/{id}/move': {
+      post: {
+        summary: 'Déplacer une unité (réorganisation datée) — org.manage + PORTÉE organisationnelle réelle sur l’unité',
+        description:
+          'Clôt la période hiérarchique courante à la date d’effet et ouvre une nouvelle ligne — l’historique ' +
+          'antérieur n’est JAMAIS réécrit. Anti-cycle vérifié à la date. Avec workflowDefinitionKey : le changement ' +
+          'devient un pending_change soumis au Workflow Engine (appliqué à l’approbation, statut conflict si l’état a ' +
+          'bougé entre-temps). Notification org.unit_moved via E5 si un modèle actif existe.',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ moved } ou { submitted, pendingChangeId, workflowInstanceId }' }, '403': err('Portée insuffisante'), '404': err('Unité ou définition introuvable'), '409': err('Cycle (code=cycle)') },
+      },
+    },
+    '/org/positions': {
+      post: { summary: 'Créer un poste + rattachements datés (unité, société, emploi, site?, centre de coûts?, manager?) — org.manage, audité', security: bearer, responses: { '201': { description: '{ id }' }, '400': err('Référence introuvable'), '409': err('Code déjà utilisé') } },
+      get: { summary: 'Lister/rechercher les postes (unitId, date, status) — org.view', security: bearer, responses: { '200': { description: 'Postes + rattachement applicable à la date' } } },
+    },
+    '/org/positions/{id}': {
+      get: { summary: 'Détail d’un poste + historiques datés (rattachements, managers) — org.view', security: bearer, parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Poste + assignmentHistory[] + managerHistory[]' }, '404': err('Introuvable') } },
+    },
+    '/org/positions/{id}/manager-line': {
+      get: { summary: 'Ligne managériale du poste à une date (résolution d’approbateur E3 par ligne hiérarchique)', security: bearer, parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'date', in: 'query', required: false, schema: { type: 'string', format: 'date' } }], responses: { '200': { description: '{ date, managers[] } (chaîne ascendante)' }, '404': err('Introuvable') } },
+    },
+    '/org/chart': {
+      get: { summary: 'Organigramme des unités À UNE DATE (arbre) — une réorganisation future ne change pas le passé', security: bearer, parameters: [{ name: 'date', in: 'query', required: false, schema: { type: 'string', format: 'date' } }, { name: 'rootUnitId', in: 'query', required: false, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: '{ date, tree[] }' } } },
+    },
+    '/org/{entity}/{id}/status': {
+      post: {
+        summary: 'Changer le statut (draft→active⇄inactive→archived, archived terminal) — org.manage, audité avec old/new',
+        description: 'Une unité avec enfants ou postes ACTIFS ne se désactive pas (409 children_active) : aucun orphelin. Aucune suppression physique n’existe.',
+        security: bearer,
+        parameters: [
+          { name: 'entity', in: 'path', required: true, schema: { type: 'string', enum: ['companies', 'sites', 'cost-centers', 'jobs', 'units', 'positions'] } },
+          { name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+        ],
+        responses: { '200': { description: '{ status }' }, '400': err('Transition interdite'), '404': err('Introuvable'), '409': err('Dépendances actives (code=children_active)') },
+      },
+    },
+    '/org/changes/{id}': {
+      get: { summary: 'Suivre un changement structurel soumis au workflow (pending/applied/rejected/conflict) — org.view', security: bearer, parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Changement + statut' }, '404': err('Introuvable') } },
+    },
+    '/org/import': {
+      post: {
+        summary: 'Import initial CSV (preview | apply ATOMIQUE) — org.import, audité',
+        description:
+          'Colonnes : kind, code, label_fr, label_en, unit_type, parent_code, unit_code, company_code, site_code, ' +
+          'job_code, cost_center_code, manager_position_code, effective_from, city, category, legal_form. ' +
+          'Validation COMPLÈTE avant toute écriture (cycles, doublons, références, collisions avec l’existant) : la ' +
+          'moindre erreur ⇒ 422 avec rapport par ligne et ZÉRO insertion — jamais d’insertion partielle silencieuse. ' +
+          'Les références se résolvent PAR CODE dans le tenant courant : aucune référence croisée inter-tenant possible.',
+        security: bearer,
+        responses: { '200': { description: '{ mode, counts } (preview valide ou import appliqué)' }, '422': err('Rapport d’erreurs par ligne — aucune écriture') },
+      },
+    },
     '/openapi.json': {
       get: { summary: 'Cette spécification', responses: { '200': { description: 'OpenAPI 3.0.3' } } },
     },
