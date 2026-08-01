@@ -59,7 +59,7 @@ export const MASKED = '‹masqué›';
  * du masquage à l'écriture côté RH.
  */
 const SECRET_KEY_RE =
-  /(password|passwd|mot_?de_?passe|secret|token|jeton|otp|totp|mfa|credential|api_?key|apikey|private_?key|cle_?privee|hash|cookie|authorization|cnss|ifu|tax_?id|id_document_number|passport|iban|bank|banque|emergency)/i;
+  /(password|passwd|mot_?de_?passe|secret|token|jeton|otp|totp|mfa|credential|api_?key|apikey|private_?key|cle_?privee|hash|cookie|authorization|cnss|ifu|tax_?id|id_?document_?number|passport|iban|bank|banque|emergency)/i;
 
 export function isSecretKey(key: string): boolean {
   return SECRET_KEY_RE.test(key);

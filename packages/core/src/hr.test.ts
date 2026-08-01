@@ -109,6 +109,33 @@ test('maskSensitiveFields : valeur non textuelle sous clé sensible ⇒ rien ne 
   assert.equal(out['emergency'], '•••');
 });
 
+test('maskSensitiveFields : les clés camelCase des objets audités sont masquées aussi', () => {
+  // Les services passent des objets camelCase à l'audit — le motif doit couvrir les
+  // deux graphies (fuite du numéro de pièce constatée au run CI 30706100687).
+  const out = maskSensitiveFields({
+    cnssNumber: 'CNSS-0099887766',
+    taxId: 'IFU-12345678',
+    idDocumentNumber: 'CNI-987654321',
+    idDocumentType: 'cni',
+    personalPhone: '+2290196000001',
+    personalEmail: 'a@exemple.bj',
+    emergencyPhone: '+2290197000001',
+    matricule: 'HR-0001',
+  });
+  assert.equal(out['cnssNumber'], '•••766');
+  assert.equal(out['taxId'], '•••678');
+  assert.equal(out['idDocumentNumber'], '•••321');
+  assert.equal(out['idDocumentType'], 'cni', 'le TYPE de pièce reste lisible');
+  assert.equal(out['personalPhone'], '•••001');
+  assert.equal(out['personalEmail'], '•••.bj');
+  assert.equal(out['emergencyPhone'], '•••001');
+  assert.equal(out['matricule'], 'HR-0001');
+  const s = JSON.stringify(out);
+  for (const leaked of ['0099887', 'IFU-12345', 'CNI-98765', '019600000', 'a@exemple']) {
+    assert.ok(!s.includes(leaked), `la valeur ${leaked}… ne doit pas fuiter`);
+  }
+});
+
 // ---------- État à une date ----------
 
 test('statusAtDate : dernier événement porteur de statut à la date, bornes incluses', () => {

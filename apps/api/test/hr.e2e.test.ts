@@ -37,6 +37,10 @@ function psqlErr(sql: string): string {
 }
 
 const rid = randomUUID().slice(0, 8);
+// Les matricules sont NORMALISÉS EN MAJUSCULES à l'import : toute vérification par
+// égalité stricte en base doit utiliser cette forme (le rid hexadécimal porte des
+// minuscules — leçon du run CI 30706100687).
+const RID = rid.toUpperCase();
 const P = 'Sentier-Karite-2026!';
 const slugA = `hr-a-${rid}`;
 const slugB = `hr-b-${rid}`;
@@ -352,11 +356,19 @@ test('zones protégées : permissions dédiées, lectures AUDITÉES, valeurs mas
   assert.ok(!auditRow.includes(CNSS1), 'le numéro complet n’atteint JAMAIS l’audit');
   assert.ok(auditRow.includes('•••'), 'seul le masque •••+3 est stocké');
   // Et la CONSULTATION d'audit (E6) masque la clé entière — double barrière.
+  // La LISTE est compacte PAR CONCEPTION (aucune valeur old/new) ; les valeurs ne
+  // sortent que dans le DÉTAIL, déjà masquées.
   const ev = await api(`/audit/events?module=hr&action=employee_identifiers_updated&recordId=${e1}`, adm, undefined, 'GET');
   assert.equal(ev.status, 200);
-  const items = ((await ev.json()) as { items: Array<{ newValue: Record<string, string> }> }).items;
+  const items = ((await ev.json()) as { items: Array<{ id: string; newValue?: unknown }> }).items;
   assert.ok(items.length >= 1);
-  assert.equal(items[0]!.newValue['cnssNumber'], '‹masqué›', 'la vue d’audit remplace la valeur par ‹masqué›');
+  assert.ok(!('newValue' in items[0]!), 'la liste d’audit ne transporte JAMAIS les valeurs (minimisation E6)');
+  const detail = await api(`/audit/events/${items[0]!.id}`, adm, undefined, 'GET');
+  assert.equal(detail.status, 200);
+  const detailBody = (await detail.json()) as { newValue: Record<string, string> };
+  assert.equal(detailBody.newValue['cnssNumber'], '‹masqué›', 'le détail d’audit remplace la valeur par ‹masqué›');
+  assert.ok(!JSON.stringify(detailBody).includes(CNSS1), 'le numéro CNSS complet n’apparaît nulle part dans la consultation');
+  assert.ok(!JSON.stringify(detailBody).includes(`CNI-${rid}-9`), 'le numéro de pièce complet non plus');
   // Documents : métadonnées seulement, permission dédiée, lecture auditée.
   assert.equal((await api(`/employees/${e1}/documents`, adm, { docType: 'contrat', label: 'Contrat CDI 2026', fileRef: 'stockage-externe-001' })).status, 201);
   assert.equal((await api(`/employees/${e1}/documents`, priv, undefined, 'GET')).status, 403, 'view_private ≠ view_documents');
@@ -471,7 +483,7 @@ test('import CSV : preview sans écriture, apply ATOMIQUE, rejet SANS insertion 
   assert.equal(psql(`SELECT count(*) FROM core.employees WHERE tenant_id='${tenantAId}' AND matricule LIKE 'IMP-%'`), '3');
   assert.equal(psql(`SELECT count(*) FROM core.employee_assignments a JOIN core.employees e ON e.id=a.employee_id WHERE e.matricule LIKE 'IMP-%' AND a.is_primary`), '3');
   assert.equal(psql(`SELECT count(*) FROM core.career_events c JOIN core.employees e ON e.id=c.employee_id WHERE e.matricule LIKE 'IMP-%' AND c.event_type='hire'`), '3');
-  assert.equal(psql(`SELECT cnss_number FROM core.employee_identifiers i JOIN core.employees e ON e.id=i.employee_id WHERE e.matricule='IMP-${rid}-1'`), `CNSS-IMP-${rid}-1`);
+  assert.equal(psql(`SELECT cnss_number FROM core.employee_identifiers i JOIN core.employees e ON e.id=i.employee_id WHERE e.matricule='IMP-${RID}-1'`), `CNSS-IMP-${rid}-1`);
   // Rejouer le même fichier : 422 (create_only) et rien de plus n'est écrit.
   const replay = await api('/hr/import', adm, { csv, mode: 'apply', strategy: 'create_only' });
   assert.equal(replay.status, 422);
@@ -486,7 +498,7 @@ test('import CSV : preview sans écriture, apply ATOMIQUE, rejet SANS insertion 
   assert.equal(bad.status, 422);
   const badBody = (await bad.json()) as { errors: Array<{ line: number; error: string }> };
   assert.ok(badBody.errors.some((er) => er.line === 3 && er.error.includes('UNIT-NOPE')));
-  assert.equal(psql(`SELECT count(*) FROM core.employees WHERE tenant_id='${tenantAId}' AND matricule IN ('IMP-OK-${rid}','IMP-BAD-${rid}')`), '0', 'la ligne VALIDE du lot fautif n’est pas entrée non plus');
+  assert.equal(psql(`SELECT count(*) FROM core.employees WHERE tenant_id='${tenantAId}' AND matricule IN ('IMP-OK-${RID}','IMP-BAD-${RID}')`), '0', 'la ligne VALIDE du lot fautif n’est pas entrée non plus');
   // Doublon CNSS DANS le fichier : signalé par ligne, la VALEUR ne sort jamais.
   const cnssDup = `CNSS-DUP-${rid}-424242`;
   const dupCsv = [

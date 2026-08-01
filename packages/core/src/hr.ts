@@ -61,8 +61,10 @@ export function maskIdentifier(value: string | null | undefined): string | null 
  * contact d'urgence et coordonnées personnelles. Le type de pièce reste lisible
  * (c'est le numéro qui est sensible).
  */
+// NB : les objets audités portent des clés camelCase (idDocumentNumber, personalPhone…) —
+// les séparateurs sont donc OPTIONNELS dans le motif (leçon du run CI 30706100687).
 const MASK_ON_WRITE_RE =
-  /(cnss|tax_?id|ifu|id_document_number|iban|bank|banque|passport|emergency|personal_phone|personal_email)/i;
+  /(cnss|tax_?id|ifu|id_?document_?number|iban|bank|banque|passport|emergency|personal_?phone|personal_?email)/i;
 
 export function maskSensitiveFields(input: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
