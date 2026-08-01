@@ -1,10 +1,17 @@
 # CI KORA — socle de données.
-# NOTE : rédigé hors GitHub (sandbox sans accès réseau) — à valider au premier push ;
-# la suite de tests elle-même est exécutée et verte localement (voir docs/adr/ADR-002).
+# Chaque run produit des artefacts d'exécution téléchargeables : version PostgreSQL,
+# SHA du commit, ledger des migrations, rapport de seed et résultats de tests.
+# NOTE : rédigée hors GitHub (sandbox sans accès réseau) puis REJOUÉE À L'IDENTIQUE sur
+# un cluster PostgreSQL 16 vierge le 01/08/2026 (voir docs/adr/ADR-002 et le journal de
+# Phase 1) — à confirmer sur GitHub au premier push.
 name: CI
 on:
   push:
   pull_request:
+
+defaults:
+  run:
+    shell: bash   # bash -eo pipefail : un échec sous tee reste un échec
 
 jobs:
   db-socle:
@@ -29,22 +36,48 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Créer les rôles et la base
+      - name: Préparer le dossier d'artefacts
+        run: mkdir -p ci-artifacts
+
+      - name: Créer les rôles et la base (environnement vierge)
         run: |
-          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 <<'SQL'
-          CREATE ROLE kora_migrator LOGIN PASSWORD 'kora_migrator_dev';
-          CREATE ROLE kora_app LOGIN PASSWORD 'kora_app_dev' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
-          CREATE DATABASE kora OWNER kora_migrator;
-          SQL
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE kora_migrator LOGIN PASSWORD 'kora_migrator_dev'" \
+            -c "CREATE ROLE kora_app LOGIN PASSWORD 'kora_app_dev' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS" \
+            -c "CREATE DATABASE kora OWNER kora_migrator" \
+            2>&1 | tee ci-artifacts/00-provisionnement.log
 
-      - name: Migrations
-        run: bash infra/db/migrate.sh
+      - name: Migrations (premier passage)
+        run: bash infra/db/migrate.sh 2>&1 | tee ci-artifacts/01-migrations.log
 
-      - name: Rejouer les migrations (idempotence du ledger)
-        run: bash infra/db/migrate.sh
+      - name: Migrations (rejeu — idempotence du ledger)
+        run: bash infra/db/migrate.sh 2>&1 | tee ci-artifacts/02-migrations-rejeu.log
 
-      - name: Seed de développement
-        run: bash infra/db/seed.sh
+      - name: Seed (sans intervention manuelle)
+        run: bash infra/db/seed.sh 2>&1 | tee ci-artifacts/03-seed.log
 
-      - name: Tests du socle (RLS, contraintes, audit, paramètres)
-        run: bash infra/db/tests/run_tests.sh
+      - name: Tests du socle (RLS, contraintes, audit, paramètres, falsification)
+        run: bash infra/db/tests/run_tests.sh 2>&1 | tee ci-artifacts/04-tests.log
+
+      - name: Métadonnées d'exécution (toujours générées)
+        if: always()
+        run: |
+          {
+            echo "commit_sha=${GITHUB_SHA}"
+            echo "ref=${GITHUB_REF_NAME:-}"
+            echo "run_id=${GITHUB_RUN_ID:-}"
+            echo "date_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "psql_client=$(psql --version)"
+            echo "postgresql_server=$(psql "$DATABASE_URL_SUPER" -tAc 'SELECT version()' 2>/dev/null || echo 'indisponible')"
+            psql "$DATABASE_URL_MIGRATOR" -tAc "SELECT 'parametres_legaux_draft=' || count(*) FROM compliance.legal_parameters WHERE status = 'draft'" 2>/dev/null || true
+          } > ci-artifacts/run-metadata.txt
+          psql "$DATABASE_URL_MIGRATOR" -c 'TABLE meta.schema_migrations' \
+            > ci-artifacts/migrations-ledger.txt 2>&1 || true
+
+      - name: Publier les artefacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kora-ci-artefacts-${{ github.sha }}
+          path: ci-artifacts/
+          if-no-files-found: error
