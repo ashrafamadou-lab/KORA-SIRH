@@ -16,7 +16,14 @@ import { MfaService } from './mfa.service';
 import { SessionGuard, type AuthenticatedRequest } from './session.guard';
 import { PrismaService } from '../prisma.service';
 import { clearedSessionCookie, csrfTokenFor, sessionCookie, sessionTokenFromCookieHeader } from './csrf.util';
-import type { Response as ExpressResponse } from 'express';
+/**
+ * Type structurel minimal de la réponse HTTP (seul setHeader est utilisé, pour
+ * Set-Cookie). On n'importe PAS les types du paquet `express` : @types/express
+ * n'est pas dans les dépendances et le lockfile ne doit pas bouger pour un type.
+ */
+interface ResponseAvecEntetes {
+  setHeader(name: string, value: string): void;
+}
 
 function requireString(value: unknown, field: string, maxLength: number): string {
   if (typeof value !== 'string' || value.length === 0 || value.length > maxLength) {
@@ -57,7 +64,7 @@ export class AuthController {
   async login(
     @Body() body: Record<string, unknown>,
     @Req() req: AuthenticatedRequest & { ip?: string },
-    @Res({ passthrough: true }) res: ExpressResponse,
+    @Res({ passthrough: true }) res: ResponseAvecEntetes,
   ): Promise<LoginResult | Record<string, unknown>> {
     const tenantSlug = requireString(body?.['tenantSlug'], 'tenantSlug', 63);
     const email = requireString(body?.['email'], 'email', 320);
@@ -133,7 +140,7 @@ export class AuthController {
   @UseGuards(SessionGuard)
   async logout(
     @Req() req: AuthenticatedRequest,
-    @Res({ passthrough: true }) res: ExpressResponse,
+    @Res({ passthrough: true }) res: ResponseAvecEntetes,
   ): Promise<void> {
     const header = req.headers['authorization'];
     const value = Array.isArray(header) ? header[0] : header;
