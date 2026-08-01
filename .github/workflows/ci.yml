@@ -1,0 +1,50 @@
+# CI KORA — socle de données.
+# NOTE : rédigé hors GitHub (sandbox sans accès réseau) — à valider au premier push ;
+# la suite de tests elle-même est exécutée et verte localement (voir docs/adr/ADR-002).
+name: CI
+on:
+  push:
+  pull_request:
+
+jobs:
+  db-socle:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL_MIGRATOR: postgres://kora_migrator:kora_migrator_dev@127.0.0.1:5432/kora
+      DATABASE_URL_APP: postgres://kora_app:kora_app_dev@127.0.0.1:5432/kora
+      DATABASE_URL_SUPER: postgres://postgres:postgres@127.0.0.1:5432/kora
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Créer les rôles et la base
+        run: |
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE kora_migrator LOGIN PASSWORD 'kora_migrator_dev';
+          CREATE ROLE kora_app LOGIN PASSWORD 'kora_app_dev' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+          CREATE DATABASE kora OWNER kora_migrator;
+          SQL
+
+      - name: Migrations
+        run: bash infra/db/migrate.sh
+
+      - name: Rejouer les migrations (idempotence du ledger)
+        run: bash infra/db/migrate.sh
+
+      - name: Seed de développement
+        run: bash infra/db/seed.sh
+
+      - name: Tests du socle (RLS, contraintes, audit, paramètres)
+        run: bash infra/db/tests/run_tests.sh

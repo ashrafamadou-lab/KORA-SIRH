@@ -1,0 +1,19 @@
+{
+  "name": "kora",
+  "version": "0.1.0",
+  "private": true,
+  "description": "KORA — SIRH d'entreprise pour le Bénin (monolithe modulaire, multi-tenant). Incrément 1 : socle de données.",
+  "license": "UNLICENSED",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "db:migrate": "bash infra/db/migrate.sh",
+    "db:seed": "bash infra/db/seed.sh",
+    "db:test": "bash infra/db/tests/run_tests.sh"
+  }
+}
