@@ -69,7 +69,7 @@ jobs:
             echo "date_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             echo "psql_client=$(psql --version)"
             echo "postgresql_server=$(psql "$DATABASE_URL_SUPER" -tAc 'SELECT version()' 2>/dev/null || echo 'indisponible')"
-            psql "$DATABASE_URL_MIGRATOR" -tAc "SELECT 'parametres_legaux_draft=' || count(*) FROM compliance.legal_parameters WHERE status = 'draft'" 2>/dev/null || true
+            psql "$DATABASE_URL_MIGRATOR" -tAc "SELECT 'parametres_legaux_draft_seed=' || count(*) FROM compliance.legal_parameters WHERE status = 'draft' AND key NOT LIKE 'test.%'" 2>/dev/null || true
           } > ci-artifacts/run-metadata.txt
           psql "$DATABASE_URL_MIGRATOR" -c 'TABLE meta.schema_migrations' \
             > ci-artifacts/migrations-ledger.txt 2>&1 || true
