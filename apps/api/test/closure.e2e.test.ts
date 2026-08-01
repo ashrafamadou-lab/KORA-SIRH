@@ -60,6 +60,11 @@ before(async () => {
   targetId = psql(`INSERT INTO admin.users (tenant_id, email, password_hash) VALUES ('${a.tenantId}','${targetEmail}','${hashA}') RETURNING id`);
   psql(`INSERT INTO admin.users (tenant_id, email, password_hash) VALUES ('${b.tenantId}','${bEmail}','${hashB}')`);
 
+  // employees.view vient du SEED, jamais d'une migration — la CI migre sans seeder :
+  // on l'insère au catalogue ici (même motif qu'auth.e2e) au lieu de dépendre de la
+  // course avec l'autre fichier de test.
+  psql(`INSERT INTO admin.permissions (key, description) VALUES ('employees.view', 'e2e') ON CONFLICT (key) DO NOTHING`);
+
   // Rôles tenant A. admin : toutes les permissions admin + employees.view. officer : users.view seul.
   const adminRole = psql(`INSERT INTO admin.roles (tenant_id, key, name) VALUES ('${a.tenantId}','admin-${rid}','Admin') RETURNING id`);
   const officerRole = psql(`INSERT INTO admin.roles (tenant_id, key, name) VALUES ('${a.tenantId}','officer-${rid}','Officer') RETURNING id`);
