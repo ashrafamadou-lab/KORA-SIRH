@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 import * as argon2 from 'argon2';
 import type { INestApplication } from '@nestjs/common';
 import { createApp } from '../src/main';
+import { hashSessionToken } from '../../../packages/core/src/session-token.ts';
 
 const MIGRATOR_URL =
   process.env.DATABASE_URL_MIGRATOR ??
@@ -29,6 +30,7 @@ const rid = randomUUID().slice(0, 8);
 const slug = `e2e-${rid}`;
 const email1 = `nadia.${rid}@demo.bj`;
 const email2 = `firmin.${rid}@demo.bj`;
+const email3 = `sarah.${rid}@demo.bj`;
 const GOOD_PASSWORD = 'Trajet-Manguier-2026!';
 
 let app: INestApplication;
@@ -44,6 +46,9 @@ before(async () => {
   );
   psql(
     `INSERT INTO admin.users (tenant_id, email, password_hash) VALUES ('${tenantId}', '${email2}', '${hash}')`,
+  );
+  psql(
+    `INSERT INTO admin.users (tenant_id, email, password_hash) VALUES ('${tenantId}', '${email3}', '${hash}')`,
   );
 
   app = await createApp();
@@ -113,6 +118,40 @@ test('me : jeton de pacotille → 401', async () => {
     const res = await fetch(`${base}/auth/me`, { headers: { authorization: `Bearer ${bad}` } });
     assert.equal(res.status, 401);
   }
+});
+
+test('désactivation : la session d’un utilisateur désactivé est refusée ET révoquée', async () => {
+  const res = await login({ tenantSlug: slug, email: email1, password: GOOD_PASSWORD });
+  assert.equal(res.status, 200);
+  const { token } = (await res.json()) as { token: string };
+
+  psql(`UPDATE admin.users SET is_active = false WHERE email = '${email1}'`);
+  const me = await fetch(`${base}/auth/me`, { headers: { authorization: `Bearer ${token}` } });
+  assert.equal(me.status, 401, 'compte désactivé = session inutilisable immédiatement');
+
+  const revoked = psql(
+    `SELECT (revoked_at IS NOT NULL)::text FROM admin.sessions WHERE token_hash = '${hashSessionToken(token)}'`,
+  );
+  assert.equal(revoked, 'true', 'la session présentée a été révoquée');
+
+  psql(`UPDATE admin.users SET is_active = true WHERE email = '${email1}'`);
+  const meAfterReactivation = await fetch(`${base}/auth/me`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  assert.equal(meAfterReactivation.status, 401, 'la révocation est définitive, pas suspendue');
+});
+
+test('concurrence : deux échecs simultanés incrémentent le compteur de 2 (atomicité)', async () => {
+  const [a, b] = await Promise.all([
+    login({ tenantSlug: slug, email: email3, password: 'Mauvais-2026!' }),
+    login({ tenantSlug: slug, email: email3, password: 'Mauvais-2026!' }),
+  ]);
+  assert.equal(a.status, 401);
+  assert.equal(b.status, 401);
+  const count = Number(
+    psql(`SELECT failed_login_count FROM admin.users WHERE email = '${email3}'`),
+  );
+  assert.equal(count, 2, 'aucun incrément perdu sous concurrence');
 });
 
 test('verrouillage progressif : 5 échecs → 423 au 6e essai, journalisé', async () => {

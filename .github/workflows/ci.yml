@@ -89,12 +89,15 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          # Type stripping natif requis (revue sponsor n° 2) : ≥ 22.18, jamais un 22.x flottant.
+          node-version: '>=22.18 <23'
       - name: Tests du domaine pur (@kora/core — zéro dépendance)
         run: cd packages/core && node --test src/*.test.ts
 
   api:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # bootstrap du lockfile (commit [skip ci]) — voir l'étape dédiée
     services:
       postgres:
         image: postgres:16
@@ -115,7 +118,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          node-version: '>=22.18 <23'
 
       - name: Créer les rôles et la base
         run: |
@@ -127,16 +130,35 @@ jobs:
       - name: Migrations
         run: bash infra/db/migrate.sh
 
-      - name: Dépendances API
-        # npm install (pas ci) : le lockfile sera généré et committé depuis un poste avec
-        # accès registre — suivi dans le journal de Phase 1.
-        run: cd apps/api && npm install --no-audit --no-fund
+      - name: Dépendances (npm ci reproductible ; npm install en bootstrap unique)
+        id: deps
+        # Revue sponsor n° 1 : npm ci dès qu'un lockfile existe. Le sandbox de
+        # développement n'ayant pas accès au registre npm, le lockfile est généré ICI
+        # au premier run (workspaces → lockfile racine) puis committé par l'étape
+        # finale ; tous les runs suivants passent par npm ci.
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci --no-audit --no-fund
+            echo "generated=false" >> "$GITHUB_OUTPUT"
+          else
+            npm install --no-audit --no-fund
+            echo "generated=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Client Prisma
         run: cd apps/api && npx prisma generate
 
       - name: Build TypeScript strict
-        run: cd apps/api && npm run build
+        run: cd apps/api && npx tsc -p tsconfig.json
 
-      - name: E2E auth (login, sessions, verrouillage, audit)
-        run: cd apps/api && npm test
+      - name: E2E auth (login, sessions, verrouillage atomique, désactivation, audit)
+        run: cd apps/api && node --test dist/apps/api/test/
+
+      - name: Bootstrap du lockfile (commit unique, [skip ci])
+        if: steps.deps.outputs.generated == 'true' && github.ref == 'refs/heads/main' && success()
+        run: |
+          git config user.name "kora-ci"
+          git config user.email "ci@users.noreply.github.com"
+          git add package-lock.json
+          git commit -m "CI bootstrap : package-lock.json généré par le job api — npm ci désormais [skip ci]"
+          git push

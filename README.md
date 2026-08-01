@@ -21,11 +21,12 @@ pas contresigné.
 | Seed : 16 rôles, 2 tenants DEMO, 18 paramètres Bénin **en draft** (contreseing requis) | ✅ Appliqué |
 | Auth — schéma (sessions, verrouillage, resolve_tenant) — migration 0007 | ✅ Testé (`60_…`) |
 | `@kora/core` — domaine pur : TOTP (vecteurs RFC 6238), politique mdp, verrouillage progressif, jetons de session, RBAC anti-élévation | ✅ 19 tests node:test verts (zéro dépendance) |
-| `@kora/api` — NestJS + Prisma (RLS par set_config), login/me/logout, lockout, audit | ⚠ Écrit + e2e fournis — **preuve = job CI `api` au prochain push** |
-| MFA TOTP côté API (enrôlement/vérification), RBAC guard sur endpoints métier, OpenAPI | ⛔ NOT IMPLEMENTED — suite de l'incrément 2 |
-| Workflow/Notification engines (services), Frontend PWA | ⛔ NOT IMPLEMENTED — incréments suivants / Phase 2-3 |
-| CI GitHub Actions | ✅ `db-socle` validé sur GitHub ; jobs `core` et `api` ajoutés (actions v6/v7) |
-| Lockfile npm (`package-lock.json`) | ⚠ À générer/committer depuis un poste avec accès registre (la CI utilise `npm install`) |
+| `@kora/api` — NestJS + Prisma (RLS par set_config) : login/me/logout, verrouillage **atomique** (UPDATE relatif), sessions liées à `is_active` (désactivation ⇒ révocation immédiate), audit | ⚠ Écrit + e2e fournis — **preuve = job CI `api`** |
+| **MFA TOTP — socle technique uniquement** : colonnes en base (0007) + primitives `@kora/core` validées contre la RFC 6238. AUCUN contrôle MFA au login tant que l'enrôlement, la vérification au login, la récupération et la désactivation ne sont pas livrés de bout en bout | ⛔ NOT IMPLEMENTED côté API |
+| **RBAC — logique de domaine uniquement** : résolution testée dans `@kora/core` (anti-élévation). Aucun guard API ne charge encore rôles, permissions et portées depuis la base | ⛔ NOT IMPLEMENTED côté API |
+| OpenAPI, Workflow/Notification engines (services), Frontend PWA | ⛔ NOT IMPLEMENTED — incréments suivants / Phase 2-3 |
+| CI GitHub Actions | ✅ `db-socle` validé sur GitHub ; jobs `core` et `api` (actions v6/v7, **Node ≥ 22.18 épinglé**) |
+| Lockfile npm (`package-lock.json`) | ⚠ Bootstrap automatique : généré et committé par la CI au premier run vert (`[skip ci]`), puis **`npm ci`** systématique — le sandbox de dev n'a pas d'accès au registre |
 
 ## Structure
 

@@ -10,7 +10,6 @@ import { PrismaService } from '../prisma.service';
 import {
   DEFAULT_LOCKOUT_POLICY,
   isLocked,
-  lockedUntilMs,
 } from '../../../../packages/core/src/lockout.ts';
 import {
   hashSessionToken,
@@ -101,15 +100,31 @@ export class AuthService {
         );
       }
 
+      // NB : le MFA n'est PAS appliqué au login à ce stade — seuls le socle base
+      // (mfa_enabled, mfa_secret_enc) et les primitives @kora/core (TOTP) existent.
+      // L'enrôlement / vérification / récupération / désactivation arrivent dans la
+      // tranche suivante de l'incrément 2 (voir README, périmètre honnête).
       const valid = await argon2.verify(user.password_hash, input.password).catch(() => false);
       if (!valid) {
-        const failedCount = user.failed_login_count + 1;
-        const until = lockedUntilMs(failedCount, now, DEFAULT_LOCKOUT_POLICY);
-        await tx.$executeRaw`
+        // Incrément ATOMIQUE (revue sponsor n° 4) : UPDATE relatif — deux échecs
+        // concurrents se sérialisent sur le verrou de ligne, aucun compte perdu.
+        // La politique (seuil 5, 30 s × 2^n, plafond 900 s) reste celle de
+        // DEFAULT_LOCKOUT_POLICY, injectée en paramètres du CASE.
+        const p = DEFAULT_LOCKOUT_POLICY;
+        const updated = await tx.$queryRaw<Array<{ failed_login_count: number }>>`
           UPDATE admin.users
-             SET failed_login_count = ${failedCount}::int,
-                 locked_until = ${until === null ? null : new Date(until)}::timestamptz
-           WHERE id = ${user.id}::uuid`;
+             SET failed_login_count = failed_login_count + 1,
+                 locked_until = CASE
+                   WHEN failed_login_count + 1 >= ${p.threshold}::int THEN
+                     now() + make_interval(secs => LEAST(
+                       ${p.baseSeconds}::float8
+                         * power(${p.factor}::float8, failed_login_count + 1 - ${p.threshold}::int),
+                       ${p.maxSeconds}::float8))
+                   ELSE locked_until
+                 END
+           WHERE id = ${user.id}::uuid
+           RETURNING failed_login_count`;
+        const failedCount = updated[0]?.failed_login_count ?? user.failed_login_count + 1;
         await this.audit(tx, tenantId, {
           action: 'login_failed',
           actorUserId: user.id,
@@ -170,15 +185,32 @@ export class AuthService {
       );
       if (status !== 'active') throw new UnauthorizedException('session invalide');
 
+      // Revue sponsor n° 3 : une session ne survit pas à la désactivation du compte.
+      // Utilisateur absent, supprimé ou inactif → la session présentée est RÉVOQUÉE
+      // immédiatement (et l'événement journalisé), puis l'accès refusé.
+      const rows = await tx.$queryRaw<Array<{ email: string; is_active: boolean }>>`
+        SELECT email::text AS email, is_active FROM admin.users
+         WHERE id = ${session.userId}::uuid AND deleted_at IS NULL`;
+      const user = rows[0];
+      if (!user || !user.is_active) {
+        await tx.session.update({
+          where: { id: session.id },
+          data: { revokedAt: new Date() },
+        });
+        await this.audit(tx, session.tenantId, {
+          action: 'session_revoked',
+          actorUserId: session.userId,
+          recordId: session.id,
+          reason: user ? 'user_inactive' : 'user_missing',
+        });
+        throw new UnauthorizedException('session invalide');
+      }
+      const email = user.email;
+
       await tx.session.update({
         where: { id: session.id },
         data: { lastSeenAt: new Date() },
       });
-      const rows = await tx.$queryRaw<Array<{ email: string }>>`
-        SELECT email::text AS email FROM admin.users
-         WHERE id = ${session.userId}::uuid AND deleted_at IS NULL`;
-      const email = rows[0]?.email;
-      if (!email) throw new UnauthorizedException('session invalide');
 
       return {
         tenantId: session.tenantId,
