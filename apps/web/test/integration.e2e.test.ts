@@ -1,11 +1,14 @@
 /**
- * INTÉGRATION RÉELLE PWA ↔ API (E7) — exécutée par le job CI « web » (PostgreSQL +
- * API compilée). Prouve à travers les couches du FRONTEND (ApiClient/Session) :
- * connexion, profil enrichi → navigation par permissions, MFA réel (TOTP), langue
- * persistée serveur, sessions consultables/révocables, révocation ⇒ déconnexion
- * IMMÉDIATE, compte désactivé ⇒ déconnexion, contrôles backend effectifs en appel
- * direct (403 sans permission), purge locale à la déconnexion.
- * Hors CI (API non compilée), la suite se saute proprement.
+ * INTÉGRATION RÉELLE PWA ↔ API (E7, durcie en clôture Phase 1) — exécutée par le
+ * job CI « web » (PostgreSQL + API compilée). Prouve à travers les couches du
+ * FRONTEND (ApiClient/Session) : connexion par COOKIE HttpOnly (fetch de node ne
+ * rejouant pas les cookies, chaque session de test reçoit un pot à cookies dédié
+ * via fetchImpl — l'équivalent d'un navigateur), profil enrichi → navigation par
+ * permissions, MFA réel (TOTP), langue persistée serveur, sessions consultables/
+ * révocables, révocation ⇒ déconnexion IMMÉDIATE, compte désactivé ⇒ déconnexion,
+ * contrôles backend effectifs en appel direct (403 sans permission), CSRF exigé sur
+ * les écritures par cookie, en-têtes de sécurité servis, purge locale à la
+ * déconnexion. Hors CI (API non compilée), la suite se saute proprement.
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -34,16 +37,34 @@ function psql(sql: string): string {
   return r.stdout.trim();
 }
 
-// sessionStorage/localStorage factices : le frontend s'exécute tel quel en node.
-const tabStore = new Map<string, string>();
-(globalThis as Record<string, unknown>)['sessionStorage'] = {
-  getItem: (k: string) => tabStore.get(k) ?? null,
-  setItem: (k: string, v: string) => void tabStore.set(k, v),
-  removeItem: (k: string) => void tabStore.delete(k),
-};
+// localStorage factice (miroir de langue d'i18n) : le frontend s'exécute tel quel
+// en node. AUCUN sessionStorage : le client durci n'y touche plus jamais.
 (globalThis as Record<string, unknown>)['localStorage'] = {
   getItem: () => null, setItem: () => undefined, removeItem: () => undefined,
 };
+
+/**
+ * Pot à cookies minimal par « navigateur » simulé : fetch de node NE rejoue PAS les
+ * cookies (contrairement au navigateur, qui porte le cookie HttpOnly tout seul).
+ * Chaque Session de test reçoit SON transport — deux sessions = deux navigateurs.
+ * Le code de production, lui, ignore totalement le jeton : c'est bien le serveur
+ * qui pose et lit kora_session.
+ */
+function navigateurFetch(): typeof fetch {
+  let cookie: string | null = null;
+  return (async (...args: Parameters<typeof fetch>) => {
+    const [input, init] = args;
+    const headers = new Headers(init?.headers);
+    if (cookie) headers.set('cookie', cookie);
+    const res = await fetch(input, { ...init, headers });
+    for (const sc of res.headers.getSetCookie()) {
+      if (!sc.startsWith('kora_session=')) continue;
+      const maxAge = /max-age=(-?\d+)/i.exec(sc);
+      cookie = maxAge && Number(maxAge[1]) <= 0 ? null : sc.split(';')[0]!;
+    }
+    return res;
+  }) as typeof fetch;
+}
 
 const rid = randomUUID().slice(0, 8);
 const P = 'Plateau-Zou-2026!';
@@ -62,6 +83,7 @@ function makeSession(): { session: Session; purges: () => number } {
   const holder: { session: Session | null } = { session: null };
   const api = new ApiClient({
     baseUrl: base,
+    fetchImpl: navigateurFetch(),
     onUnauthorized: () => {
       purgeCount += 1;
       holder.session?.purge();
@@ -118,7 +140,7 @@ test('connexion réelle → profil enrichi → la navigation reflète les PERMIS
   const routes = nav.flatMap((s) => s.items.map((i) => i.route));
   assert.ok(routes.includes('/employees') && routes.includes('/admin/users') && routes.includes('/audit'));
   await session.logout();
-  assert.equal(tabStore.size, 0, 'déconnexion ⇒ purge du jeton d’onglet');
+  assert.equal(session.isAuthenticated(), false, 'déconnexion ⇒ purge (plus AUCUN stockage d’onglet)');
 });
 
 test('identifiants invalides : refus GÉNÉRIQUE, pas de session', { skip: !RUNNABLE }, async () => {
@@ -146,16 +168,23 @@ test('navigation d’un utilisateur borné : sections absentes ET contrôle back
 test('parcours MFA RÉEL : enrôlement TOTP, login exige le code, code accepté via le frontend', { skip: !RUNNABLE }, async () => {
   const { session } = makeSession();
   assert.equal((await session.login(slug, viewerEmail, P)).kind, 'ok');
-  // Enrôlement + activation (surface API : la page dédiée arrive avec l'écran profil).
+  // Enrôlement + activation par la surface API en transport 'body' (client d'API,
+  // non CSRF-able) : le jeton n'existe plus NULLE PART côté frontend, par conception.
+  const apiLogin = await fetch(`${base}/auth/login`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ tenantSlug: slug, email: viewerEmail, password: P }),
+  });
+  assert.equal(apiLogin.status, 200);
+  const apiTok = ((await apiLogin.json()) as { token: string }).token;
   const enroll = await fetch(`${base}/auth/mfa/enroll`, {
-    method: 'POST', headers: { authorization: `Bearer ${tabStore.get('kora.session')}` },
+    method: 'POST', headers: { authorization: `Bearer ${apiTok}` },
   });
   assert.equal(enroll.status, 200);
   const { secret } = (await enroll.json()) as { secret: string };
   const code = totp(secret, Math.floor(Date.now() / 1000));
   const activate = await fetch(`${base}/auth/mfa/activate`, {
     method: 'POST',
-    headers: { authorization: `Bearer ${tabStore.get('kora.session')}`, 'content-type': 'application/json' },
+    headers: { authorization: `Bearer ${apiTok}`, 'content-type': 'application/json' },
     body: JSON.stringify({ code }),
   });
   assert.equal(activate.status, 200);
@@ -170,7 +199,7 @@ test('parcours MFA RÉEL : enrôlement TOTP, login exige le code, code accepté 
   // (sinon « compte désactivé » recevrait mfa_required au lieu d'un login franc).
   const disable = await fetch(`${base}/auth/mfa/disable`, {
     method: 'POST',
-    headers: { authorization: `Bearer ${tabStore.get('kora.session')}`, 'content-type': 'application/json' },
+    headers: { authorization: `Bearer ${apiTok}`, 'content-type': 'application/json' },
     body: JSON.stringify({ code: totp(secret, Math.floor(Date.now() / 1000)) }),
   });
   assert.equal(disable.status, 200);
@@ -191,8 +220,8 @@ test('sessions : consultables, révocation des AUTRES ⇒ leur prochaine requêt
   const s1 = makeSession();
   const s2 = makeSession();
   assert.equal((await s1.session.login(slug, adminEmail, P)).kind, 'ok');
-  // NB : les deux sessions partagent le même faux sessionStorage d'onglet — sans
-  // importance ici, chaque ApiClient garde SON jeton en mémoire.
+  // NB : chaque session a SON pot à cookies (navigateurFetch) — deux navigateurs
+  // distincts, comme deux postes de travail.
   assert.equal((await s2.session.login(slug, adminEmail, P)).kind, 'ok');
   const list = await s1.session.api.call<Array<{ id: string; current: boolean }>>('sessions');
   assert.ok(list.length >= 2, 'les deux sessions apparaissent');
