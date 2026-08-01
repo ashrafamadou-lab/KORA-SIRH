@@ -83,7 +83,9 @@ before(async () => {
   await seedUser(tenantAId, modAuditorEmail, ['audit.view_notify']);
   await seedUser(tenantAId, modExporterEmail, ['audit.view_notify', 'audit.export']);
   ownId = await seedUser(tenantAId, ownEmail, ['audit.view_own']);
-  await seedUser(tenantAId, plainEmail, ['employees.view']);
+  // Permission NON-audit portée par MIGRATION (0010) — le job CI api migre sans seeder :
+  // une clé issue du seed (ex. employees.view) violerait la FK du catalogue.
+  await seedUser(tenantAId, plainEmail, ['workflow.view']);
   await seedUser(tenantBId, bAuditorEmail, ['audit.view', 'audit.export']);
 
   // Événements de référence (le trigger de chaînage s'applique à CHAQUE insertion).
