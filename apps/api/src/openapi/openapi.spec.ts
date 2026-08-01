@@ -612,6 +612,72 @@ export const OPENAPI_SPEC = {
     '/admin/notify/deliveries/{id}/requeue': {
       post: { summary: 'Requeue d’une livraison dead_letter/cancelled (compteur remis à zéro) — notify.manage, audité', security: bearer, parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: '{ status: pending }' }, '400': err('État incompatible'), '404': err('Introuvable') } },
     },
+    '/audit/events': {
+      get: {
+        summary: 'Consulter le journal d’audit (LECTURE SEULE) — vue selon permissions : audit.view (tout), audit.view_<module>, audit.view_own',
+        description:
+          'Le périmètre de vue est résolu par permission puis INTERSECTÉ avec les filtres : un filtre ne peut ' +
+          'qu’étrécir, jamais élargir (ni contourner la RLS tenant). Valeurs sensibles systématiquement masquées. ' +
+          'Pagination STABLE par curseur (id décroissant). Les consultations au-delà de ses propres événements ' +
+          'laissent une trace d’audit distincte (audit_consulted).',
+        security: bearer,
+        parameters: [
+          { name: 'from', in: 'query', required: false, schema: { type: 'string', format: 'date-time' } },
+          { name: 'to', in: 'query', required: false, schema: { type: 'string', format: 'date-time' } },
+          { name: 'actorUserId', in: 'query', required: false, schema: { type: 'string', format: 'uuid' } },
+          { name: 'action', in: 'query', required: false, schema: { type: 'string' } },
+          { name: 'module', in: 'query', required: false, schema: { type: 'string' } },
+          { name: 'recordType', in: 'query', required: false, schema: { type: 'string' } },
+          { name: 'recordId', in: 'query', required: false, schema: { type: 'string' } },
+          { name: 'result', in: 'query', required: false, schema: { type: 'string', enum: ['success', 'denied', 'failure'] } },
+          { name: 'correlationId', in: 'query', required: false, schema: { type: 'string', format: 'uuid' } },
+          { name: 'employeeId', in: 'query', required: false, schema: { type: 'string', format: 'uuid' } },
+          { name: 'cursor', in: 'query', required: false, schema: { type: 'string' }, description: 'id de la dernière ligne vue (nextCursor de la page précédente)' },
+          { name: 'limit', in: 'query', required: false, schema: { type: 'integer', maximum: 200 } },
+        ],
+        responses: { '200': { description: '{ items[], nextCursor } — sans old/new (voir détail)' }, '400': err('Filtre ou curseur invalide'), '403': err('Aucune permission de consultation d’audit') },
+      },
+    },
+    '/audit/events/{id}': {
+      get: {
+        summary: 'Détail d’un événement (horodatage, acteur, contexte, old/new MASQUÉS) — consultation tracée',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { '200': { description: 'Événement complet, valeurs sensibles masquées' }, '403': err('Aucune permission d’audit'), '404': err('Introuvable ou hors périmètre de vue') },
+      },
+    },
+    '/audit/integrity': {
+      get: {
+        summary: 'Vérifier l’intégrité de la chaîne de hachage — statut valid | broken | unverified (audit.view)',
+        description:
+          'Vérification BORNÉE (maxRows) et REPRENABLE : si unverified, continuer avec (afterId, seed) retournés — ' +
+          'la reprise est cryptographique (seed = hash du segment vérifié précédent). AUCUNE réparation n’existe ' +
+          'dans l’API : le journal est append-only, la rupture se constate, elle ne se corrige pas. Chaque ' +
+          'vérification laisse une trace d’audit (audit_integrity_checked).',
+        security: bearer,
+        parameters: [
+          { name: 'maxRows', in: 'query', required: false, schema: { type: 'integer', minimum: 100, maximum: 50000 } },
+          { name: 'afterId', in: 'query', required: false, schema: { type: 'string' }, description: 'reprise : dernier id vérifié' },
+          { name: 'seed', in: 'query', required: false, schema: { type: 'string' }, description: 'reprise : hash (sha256 hex) du dernier segment vérifié' },
+        ],
+        responses: { '200': { description: '{ status, checked, lastId, brokenAtId?, nextAfterId?, nextSeed? }' }, '400': err('Reprise incohérente'), '403': err('Permission audit.view requise') },
+      },
+    },
+    '/audit/export/csv': {
+      get: {
+        summary: 'Exporter le journal filtré en CSV (audit.export) — export borné à la visibilité de l’acteur, lui-même audité',
+        description: 'Mêmes filtres que /audit/events. RFC 4180, BOM UTF-8, anti-injection de formules tableur, valeurs sensibles masquées. Plafond de volume (limit ≤ 10000).',
+        security: bearer,
+        responses: { '200': { description: 'text/csv (pièce jointe)' }, '403': err('Permission audit.export requise') },
+      },
+    },
+    '/audit/export/json': {
+      get: {
+        summary: 'Exporter le journal filtré en JSON (audit.export) — borné à la visibilité, audité, masqué',
+        security: bearer,
+        responses: { '200': { description: '{ count, items[] }' }, '403': err('Permission audit.export requise') },
+      },
+    },
     '/openapi.json': {
       get: { summary: 'Cette spécification', responses: { '200': { description: 'OpenAPI 3.0.3' } } },
     },

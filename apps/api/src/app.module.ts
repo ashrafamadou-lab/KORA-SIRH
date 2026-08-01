@@ -7,10 +7,11 @@ import { AdminModule } from './admin/admin.module';
 import { WorkflowModule } from './workflow/workflow.module';
 import { ConfigModule } from './config/config.module';
 import { NotifyModule } from './notify/notify.module';
+import { AuditModule } from './audit/audit.module';
 import { OpenapiController } from './openapi/openapi.controller';
 
 @Module({
-  imports: [PrismaModule, AuthModule, EmployeesModule, AdminModule, WorkflowModule, ConfigModule, NotifyModule],
+  imports: [PrismaModule, AuthModule, EmployeesModule, AdminModule, WorkflowModule, ConfigModule, NotifyModule, AuditModule],
   controllers: [HealthController, OpenapiController],
 })
 export class AppModule {}

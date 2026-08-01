@@ -9,7 +9,7 @@ pas contresigné.
 ## État du repo — honnêteté d'abord
 
 **Incréments 1 à 3 validés (socle de données, auth E1/E2 + clôture, E3 Workflow Engine, E4 Config Center) — CI verte, artefacts publiés.**
-**Tranche courante : E5 Notification Engine — livré, à prouver par la CI au prochain push. Transport sortant SIMULÉ (aucun fournisseur email/SMS payant branché).**
+**E5 Notification Engine validé (SHA 13ae258c, run 30701148520). Tranche courante : E6 Consultation d'audit — livré, à prouver par la CI au prochain push. Le journal reste append-only : E6 n'expose AUCUNE correction ni recalcul.**
 
 | Composant | État |
 |---|---|
@@ -30,6 +30,7 @@ pas contresigné.
 | **Workflow Engine v1** (E3) : définitions versionnées immuables, instances à snapshot (version figée), branches conditionnelles, submit/approve/reject/return/cancel/delegate, approbateurs role/user/manager/scope, anti-auto-approbation, échéances+escalades (tick), transitions append-only, idempotence + verrou anti-double-transition | ✅ core+SQL+e2e, CI verte |
 | **Config Center API** (E4) : cycle de vie draft→submitted→approved→(active\|scheduled)→superseded / rejected / retired ; contreseing **via le Workflow Engine** (décision liée à la version exacte) ; séparation création/vérification/activation (créateur ≠ activateur pour juridique) ; résolution temporelle passé/présent/futur ; supersession sans réécriture d'historique ; anti-chevauchement ; surcharges tenant (RLS : global lisible/surchargeacble, jamais réécrit) ; preview d'impact ; permissions ordinaires vs juridiques sensibles | ✅ core+SQL+e2e, CI verte |
 | **Notification Engine** (E5) : in-app + architecture multi-canal extensible (email/sms/push en file, **transport SIMULÉ — aucun fournisseur payant branché**) ; modèles bilingues FR/EN versionnés (contenu figé hors draft, une seule version active) ; variables contrôlées (inconnues/manquantes rejetées AVANT envoi) ; **filtre anti-secrets** (noms interdits : mot de passe/jeton/MFA/médical ; valeurs à forme de secret refusées ; journaux assainis SANS contenu) ; idempotence par clé d'événement (2 livraisons = 1 notification logique) ; file `pending/processing/sent/failed/cancelled/dead_letter` + retries à backoff + requeue/cancel admin ; destinataires user/rôle/portée/approbateur ; préférences par canal sortant (in_app = socle), **notifications obligatoires non désactivables** ; pont Workflow Engine (approbateur, demandeur, escalade, délégataire) ; audit admin ; OpenAPI | ✅ migration 0012 + test SQL 100, core notify (61 tests), 17 e2e — **preuve = CI** |
+| **Consultation d'audit** (E6) : API 100 % LECTURE (aucune route d'écriture ; la base refuse UPDATE/DELETE par trigger + absence de grant) ; recherche période/acteur/action/module/type/id/résultat/corrélation/salarié ; **pagination par curseur stable** (id) insensible aux insertions ; vues différenciées par permission (`audit.view` global, `audit.view_<module>`, `audit.view_own`) — les filtres INTERSECTENT le périmètre, jamais ne l'élargissent ; **masquage systématique** (clés secrètes ⇒ ‹masqué›, feuilles texte scrubées — API, exports ET traces) ; **intégrité de chaîne** `valid/broken/unverified` bornée et reprenable cryptographiquement (seed du segment précédent), **aucune réparation possible** ; export CSV (RFC 4180 + anti-injection tableur + BOM) / JSON plafonné, borné à la visibilité, permission `audit.export` ; consultations sensibles, vérifications et exports **eux-mêmes audités** ; `result`/`correlation_id` ajoutés HORS payload de hachage (statut métadonnées comme ip/device — chaînes existantes intactes, décision documentée) | ✅ migration 0013 + test SQL 110, core audit-view (71 tests au total), 14 e2e (falsification détectée, volume 3000+) — **preuve = CI** |
 | Frontend PWA | ⛔ NOT IMPLEMENTED — Phase 2-3 |
 | CI GitHub Actions | ✅ `db-socle` validé sur GitHub ; jobs `core` et `api` (actions v6/v7, **Node ≥ 22.18 épinglé**) |
 | Lockfile npm (`package-lock.json`) | ⚠ **Requis committé à la racine avant la CI** (le job `api` refuse de tourner sans, puis `npm ci` exclusivement — aucune écriture de la CI sur `main`). Génération : `npm install --package-lock-only` à la racine sur un poste avec accès registre, ou workflow manuel « Générer le lockfile » (artefact à committer soi-même) |
@@ -42,7 +43,7 @@ packages/core/  domaine pur zéro dépendance (TOTP, mdp, lockout, jetons, RBAC,
 infra/
   docker-compose.yml       Postgres 16 + Redis + MinIO + Mailpit (dev)
   db/
-    migrations/            0001→0012 : schémas, RBAC, core, paramètres, audit, RLS, auth, workflow, config, notify
+    migrations/            0001→0013 : schémas, RBAC, core, paramètres, audit, RLS, auth, workflow, config, notify, consultation d'audit
     seed/seed_dev.sql      rôles seed, tenants DEMO, paramètres Bénin (draft)
     migrate.sh · seed.sh   runner SQL-first (ledger meta.schema_migrations)
     tests/                 suite psql pure — run_tests.sh
