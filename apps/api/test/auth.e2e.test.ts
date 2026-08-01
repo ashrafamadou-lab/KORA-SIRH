@@ -85,8 +85,14 @@ before(async () => {
   psql(`INSERT INTO admin.user_roles (tenant_id, user_id, role_id) VALUES
         ('${tenantId}', '${user6}', '${roleId}'), ('${tenantId}', '${user7}', '${roleId}')`);
   psql(`INSERT INTO admin.user_scopes (tenant_id, user_id, scope_type) VALUES ('${tenantId}', '${user6}', 'tenant')`);
+  // Depuis E8, scope_ref est VALIDÉ contre l'organisation (trigger 0014) : la portée
+  // « site » doit référencer un site RÉEL du tenant — on le crée donc.
+  const e2eCompany = psql(`INSERT INTO org.companies (tenant_id, code, label_fr, label_en, status)
+        VALUES ('${tenantId}', 'E2E-CO-${rid.toUpperCase()}', 'Société e2e', 'E2e company', 'active') RETURNING id`);
+  const e2eSite = psql(`INSERT INTO org.sites (tenant_id, company_id, code, label_fr, label_en, status)
+        VALUES ('${tenantId}', '${e2eCompany}', 'E2E-SITE-${rid.toUpperCase()}', 'Site e2e', 'E2e site', 'active') RETURNING id`);
   psql(`INSERT INTO admin.user_scopes (tenant_id, user_id, scope_type, scope_ref)
-        VALUES ('${tenantId}', '${user7}', 'site', '${randomUUID()}')`);
+        VALUES ('${tenantId}', '${user7}', 'site', '${e2eSite}')`);
 
   app = await createApp();
   await app.listen(0);

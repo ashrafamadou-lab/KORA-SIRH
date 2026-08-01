@@ -154,8 +154,11 @@ test('unités : hiérarchie DATÉE créée, consultée à une date', async () =>
 
 test('FK inter-tenant : rejetée par POSTGRESQL, pas seulement par l’API', async () => {
   // Lien hiérarchique tenant A → parent du tenant B : violation de FK COMPOSITE en base.
+  // NB : on vise DIR (racine, aucune ligne hiérarchique) — sur une unité déjà rattachée,
+  // la contrainte d'EXCLUSION (index) se déclencherait avant la FK (after-trigger) et
+  // masquerait le message ; les deux refusent, mais c'est la FK qu'on veut exposer ici.
   const err1 = psqlErr(`INSERT INTO org.unit_parents (tenant_id, unit_id, parent_unit_id, effective_from)
-    VALUES ('${tenantAId}','${uFin}','${bUnitId}','2026-02-01')`);
+    VALUES ('${tenantAId}','${uDir}','${bUnitId}','2026-02-01')`);
   assert.ok(err1.includes('foreign key'), `attendu une violation de FK : ${err1}`);
   // Rattachement de poste vers l'unité d'un autre tenant : même refus structurel.
   const fkPos = psql(`INSERT INTO org.positions (tenant_id, code, label_fr, label_en) VALUES ('${tenantAId}','FKTEST','FK','FK') RETURNING id`);
@@ -383,7 +386,13 @@ test('suppression physique impossible ; désactivation d’un parent SANS orphel
     const res = await fetch(`${base}${p}`, { method: 'DELETE', headers: { authorization: `Bearer ${adm}` } });
     assert.ok([404, 405].includes(res.status), `DELETE ${p} → ${res.status}`);
   }
-  // DIR a des enfants actifs aujourd'hui (FIN, CPT…) : désactivation refusée — pas d'orphelins.
+  // Cycle de vie réel : les créations API naissent en DRAFT — on ACTIVE d'abord
+  // (draft→active), condition pour que la protection anti-orphelins ait un sens.
+  for (const [entity, id] of [['units', uDir], ['units', uFin], ['units', uCpt],
+    ['positions', posDaf], ['positions', posCpt1]] as const) {
+    assert.equal((await api(`/org/${entity}/${id}/status`, adm, { status: 'active' })).status, 200, `${entity}/${id} → active`);
+  }
+  // DIR a des enfants ACTIFS aujourd'hui (FIN et/ou CPT selon la date) : refusée — pas d'orphelins.
   const res = await api(`/org/units/${uDir}/status`, adm, { status: 'inactive' });
   assert.equal(res.status, 409);
   assert.equal(((await res.json()) as { code: string }).code, 'children_active');
