@@ -27,6 +27,14 @@ const ICON_PATHS: Record<string, string> = {
   globe: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm-9 9h18M12 3c3 3 3 15 0 18-3-3-3-15 0-18z',
   menu: 'M4 6h16M4 12h16M4 18h16',
   user: 'M12 4a4 4 0 1 1 0 8 4 4 0 0 1 0-8zm-8 17a8 8 0 0 1 16 0',
+  clock: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm0 4v5l4 2',
+  calendar: 'M5 6h14a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1zm3-3v4m8-4v4M4 11h16',
+  upload: 'M12 16V5m-4 4 4-4 4 4M5 19h14',
+  layers: 'M12 3 3 8l9 5 9-5zM3 14l9 5 9-5',
+  fingerprint: 'M12 6a6 6 0 0 1 6 6v3M12 9a3 3 0 0 1 3 3v5M12 12v7M6 12a6 6 0 0 1 2-4.5M7 15v3',
+  alert: 'M12 4 2 20h20zM12 10v5m0 2v1',
+  device: 'M7 3h10a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm3 15h4M9 6h6v8H9z',
+  stamp: 'M9 4h6v6a3 3 0 0 0 3 3v3H6v-3a3 3 0 0 0 3-3zM5 20h14',
 };
 
 export function icon(name: string): HTMLElement {

@@ -157,7 +157,8 @@ before(async (tc) => {
   }
   tenantId = psql(`INSERT INTO admin.tenants (slug, name, is_demo) VALUES ('${slug}','PW Browser',true) RETURNING id`);
   await seedUser(adminEmail, ['employees.view', 'employees.view_private', 'employees.view_identifiers', 'employees.view_documents',
-    'employees.view_history', 'workflow.view', 'org.view', 'users.view', 'audit.view', 'parameters.view', 'sessions.revoke']);
+    'employees.view_history', 'workflow.view', 'org.view', 'users.view', 'audit.view', 'parameters.view', 'sessions.revoke',
+    'time.schedules_view', 'time.punches_import', 'time.punches_view', 'time.punches_view_errors', 'time.devices_manage']);
   await seedUser(viewerEmail, ['employees.view']);
   await seedUser(mfaEmail, ['employees.view']);
   seedHr();
@@ -422,6 +423,87 @@ test('déconnexion : cookie détruit, stockages propres, retour arrière sans do
     await page.goto(`${BASE}/#/employees`);
     await page.waitForSelector('input[type="password"]');
     assert.ok(true, 'aucune donnée RH accessible après déconnexion');
+  });
+  await ctx.close();
+});
+
+test('TEMPS (E10.1) : import réel par l’API, registre visible, et HORS LIGNE aucune donnée de pointage ne survit', { skip: !RUNNABLE }, async () => {
+  // Import CSV RÉEL par la surface API (Bearer) : 2 pointages du salarié PW-0001.
+  const apiBase = `http://127.0.0.1:${API_PORT}/api/v1`;
+  const loginRes = await fetch(`${apiBase}/auth/login`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ tenantSlug: slug, email: adminEmail, password: P }),
+  });
+  const { token } = await loginRes.json();
+  const imp = await fetch(`${apiBase}/time/punches/import`, {
+    method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      source: 'csv', mode: 'apply', filename: 'nav.csv',
+      contentText: `matricule;dateheure;sens\nPW-0001;2026-07-01 08:02;E\nPW-0001;2026-07-01 17:31;S\n`,
+    }),
+  });
+  assert.equal(imp.status, 200);
+  assert.equal((await imp.json()).kind, 'applied');
+
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await ctx.newPage();
+  await shot(page, 'temps-pointages', async () => {
+    await login(page, adminEmail);
+    // Registre brut : le pointage importé est là, statut apparié.
+    await page.click('a[href="#/time/punches"]');
+    await page.waitForSelector('tbody tr');
+    const body = await page.evaluate(() => document.body.textContent ?? '');
+    assert.ok(body.includes('PW-0001'), 'le pointage importé apparaît');
+    assert.ok(body.includes('08:02') || body.includes('2026-07-01 08:02'), 'horodatage source affiché');
+    // Lots : compteurs visibles.
+    await page.click('a[href="#/time/batches"]');
+    await page.waitForSelector('tbody tr');
+    // HORS LIGNE : la coquille tient, AUCUNE donnée de pointage ne reste lisible.
+    await ctx.setOffline(true);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#app');
+    const report = await storageReport(page);
+    assert.deepEqual(report.cacheApiEntries, [], 'AUCUNE réponse /api en Cache Storage');
+    assert.deepEqual(report.sessionStorageKeys, [], 'sessionStorage vide');
+    assert.ok(report.localStorageKeys.every((k) => k === 'kora.locale'), 'localStorage borné à la langue');
+    assert.ok(!report.bodyText.includes('PW-0001'), 'aucun matricule pointé lisible hors ligne');
+    assert.ok(!report.bodyText.includes('08:02'), 'aucun horodatage de pointage lisible hors ligne');
+    const apiOffline = await page.evaluate(async () => {
+      try {
+        const r = await fetch('/api/v1/time/punches/raw');
+        return `status:${r.status}`;
+      } catch {
+        return 'network-error';
+      }
+    });
+    assert.equal(apiOffline, 'network-error', 'l’API de pointage ne répond JAMAIS depuis un cache');
+    await ctx.setOffline(false);
+  });
+  await ctx.close();
+});
+
+test('TEMPS (E10.1) : RBAC — sans permission, ni menu, ni écran, ni API (le serveur tranche)', { skip: !RUNNABLE }, async () => {
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await ctx.newPage();
+  await shot(page, 'temps-rbac', async () => {
+    await login(page, viewerEmail); // employees.view SEUL
+    const hasTimeLink = await page.evaluate(() => document.querySelector('a[href="#/time/punches"]') !== null);
+    assert.equal(hasTimeLink, false, 'menu Temps absent sans permission');
+    await page.goto(`${BASE}/#/time/punches`);
+    await page.waitForFunction(() =>
+      (document.body.textContent ?? '').includes('Accès refusé')
+      || (document.body.textContent ?? '').includes('Access denied'));
+    const body = await page.evaluate(() => document.body.textContent ?? '');
+    assert.ok(!body.includes('PW-0001'), 'aucun matricule de pointage rendu');
+    assert.ok(!body.includes('08:02'), 'aucun horodatage de pointage rendu');
+    // Le MASQUAGE n'est pas la sécurité : l'appel direct est refusé par le SERVEUR.
+    const direct = await page.evaluate(async () => (await fetch('/api/v1/time/punches/raw')).status);
+    assert.equal(direct, 403, 'API : 403 sans permission');
+    const importDirect = await page.evaluate(async () => (await fetch('/api/v1/time/punches/import', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ source: 'csv', mode: 'preview', contentText: 'x' }),
+    })).status);
+    assert.equal(importDirect, 403, 'API import : 403 sans permission (et CSRF géré par le client)');
   });
   await ctx.close();
 });

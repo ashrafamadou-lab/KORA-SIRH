@@ -21,6 +21,11 @@ import { workflowPage } from './pages/workflow.ts';
 import { notificationsPage, passwordPage, sessionsPage } from './pages/account.ts';
 import { adminUsersPage } from './pages/admin.ts';
 import { auditPage, configPage } from './pages/config-audit.ts';
+import {
+  timeAssignmentsPage, timeBatchDetailPage, timeBatchesPage, timeDevicesPage,
+  timeImportPage, timeMinePage, timeModelDetailPage, timeModelsPage,
+  timePunchesPage, timeUnmatchedPage,
+} from './pages/time.ts';
 import { states, stateForError } from './ui/kit.ts';
 
 const appRoot = document.getElementById('app')!;
@@ -57,6 +62,17 @@ const routes: RouteDef[] = [
   { pattern: '/admin/users', render: () => adminUsersPage(session), anyOf: ['users.view'] },
   { pattern: '/config', render: () => Promise.resolve(configPage(session)), anyOf: ['parameters.view'] },
   { pattern: '/audit', render: () => auditPage(session), anyOf: ['audit.view', 'audit.view_own'] },
+  // Temps & pointage (E10.1) — l'affichage suit les permissions, le serveur tranche.
+  { pattern: '/time/schedules', render: () => timeModelsPage(session), anyOf: ['time.schedules_view', 'time.schedules_manage', 'time.schedules_assign'] },
+  { pattern: '/time/schedules/:id', render: (m) => timeModelDetailPage(session, m.params['id']!), anyOf: ['time.schedules_view', 'time.schedules_manage', 'time.schedules_assign'] },
+  { pattern: '/time/assignments', render: () => timeAssignmentsPage(session), anyOf: ['time.schedules_assign', 'time.schedules_view'] },
+  { pattern: '/time/import', render: () => timeImportPage(session), anyOf: ['time.punches_import'] },
+  { pattern: '/time/batches', render: () => timeBatchesPage(session), anyOf: ['time.punches_view_errors', 'time.punches_import'] },
+  { pattern: '/time/batches/:id', render: (m) => timeBatchDetailPage(session, m.params['id']!), anyOf: ['time.punches_view_errors', 'time.punches_import'] },
+  { pattern: '/time/punches', render: () => timePunchesPage(session), anyOf: ['time.punches_view'] },
+  { pattern: '/time/unmatched', render: () => timeUnmatchedPage(session), anyOf: ['time.punches_view_errors', 'time.punches_import', 'time.devices_manage'] },
+  { pattern: '/time/devices', render: () => timeDevicesPage(session), anyOf: ['time.devices_manage'] },
+  { pattern: '/time/mine', render: () => timeMinePage(session), anyOf: ['time.punches_view_own'] },
 ];
 
 const CRUMB_BY_PREFIX: Array<[string, () => ReturnType<typeof crumbsOf>]> = [
@@ -67,6 +83,14 @@ const CRUMB_BY_PREFIX: Array<[string, () => ReturnType<typeof crumbsOf>]> = [
   ['/notifications', () => crumbsOf(['nav.dashboard', '/'], ['nav.notifications', null])],
   ['/me/sessions', () => crumbsOf(['nav.dashboard', '/'], ['nav.sessions', null])],
   ['/me/password', () => crumbsOf(['nav.dashboard', '/'], ['nav.password', null])],
+  ['/time/schedules', () => crumbsOf(['nav.dashboard', '/'], ['nav.time', '/time/schedules'], ['nav.timeSchedules', null])],
+  ['/time/assignments', () => crumbsOf(['nav.dashboard', '/'], ['nav.time', '/time/schedules'], ['nav.timeAssignments', null])],
+  ['/time/import', () => crumbsOf(['nav.dashboard', '/'], ['nav.time', '/time/schedules'], ['nav.timeImport', null])],
+  ['/time/batches', () => crumbsOf(['nav.dashboard', '/'], ['nav.time', '/time/schedules'], ['nav.timeBatches', null])],
+  ['/time/punches', () => crumbsOf(['nav.dashboard', '/'], ['nav.time', '/time/schedules'], ['nav.timePunches', null])],
+  ['/time/unmatched', () => crumbsOf(['nav.dashboard', '/'], ['nav.time', '/time/schedules'], ['nav.timeUnmatched', null])],
+  ['/time/devices', () => crumbsOf(['nav.dashboard', '/'], ['nav.time', '/time/schedules'], ['nav.timeDevices', null])],
+  ['/time/mine', () => crumbsOf(['nav.dashboard', '/'], ['nav.time', '/time/schedules'], ['nav.timeMine', null])],
   ['/admin', () => crumbsOf(['nav.dashboard', '/'], ['nav.adminUsers', null])],
   ['/config', () => crumbsOf(['nav.dashboard', '/'], ['nav.config', null])],
   ['/audit', () => crumbsOf(['nav.dashboard', '/'], ['nav.audit', null])],

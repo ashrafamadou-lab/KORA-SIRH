@@ -87,6 +87,39 @@ export const API_CONTRACT = {
   auditEvent: { method: 'get', path: '/audit/events/{id}' },
   auditExportCsv: { method: 'get', path: '/audit/export/csv' },
   auditExportJson: { method: 'get', path: '/audit/export/json' },
+  // Temps & pointage (E10.1)
+  timeModels: { method: 'get', path: '/time/schedules/models' },
+  timeModelCreate: { method: 'post', path: '/time/schedules/models' },
+  timeModel: { method: 'get', path: '/time/schedules/models/{id}' },
+  timeModelRetire: { method: 'post', path: '/time/schedules/models/{id}/retire' },
+  timeVersionCreate: { method: 'post', path: '/time/schedules/models/{id}/versions' },
+  timeAssignments: { method: 'get', path: '/time/schedules/assignments' },
+  timeAssign: { method: 'post', path: '/time/schedules/assignments' },
+  timeAssignByUnit: { method: 'post', path: '/time/schedules/assignments/by-unit' },
+  timeAssignmentClose: { method: 'post', path: '/time/schedules/assignments/{id}/close' },
+  timeEmployeeSchedule: { method: 'get', path: '/time/employees/{id}/schedule' },
+  timeHolidays: { method: 'get', path: '/time/holidays' },
+  timeHolidayCreate: { method: 'post', path: '/time/holidays' },
+  timeHolidayCalendarCreate: { method: 'post', path: '/time/holidays/calendars' },
+  timeHolidayRetire: { method: 'post', path: '/time/holidays/{id}/retire' },
+  timeExceptions: { method: 'get', path: '/time/exceptions' },
+  timeExceptionCreate: { method: 'post', path: '/time/exceptions' },
+  timeExceptionRetire: { method: 'post', path: '/time/exceptions/{id}/retire' },
+  timeDevices: { method: 'get', path: '/time/devices' },
+  timeDeviceCreate: { method: 'post', path: '/time/devices' },
+  timeDevicePatch: { method: 'patch', path: '/time/devices/{id}' },
+  timeMappings: { method: 'get', path: '/time/mappings' },
+  timeMappingCreate: { method: 'post', path: '/time/mappings' },
+  timeMappingRetire: { method: 'post', path: '/time/mappings/{id}/retire' },
+  timeImport: { method: 'post', path: '/time/punches/import' },
+  timeBatches: { method: 'get', path: '/time/batches' },
+  timeBatch: { method: 'get', path: '/time/batches/{id}' },
+  timeBatchFile: { method: 'get', path: '/time/batches/{id}/file' },
+  timeRawPunches: { method: 'get', path: '/time/punches/raw' },
+  timeMyPunches: { method: 'get', path: '/time/punches/mine' },
+  timeUnmatched: { method: 'get', path: '/time/punches/unmatched' },
+  timeRenormalize: { method: 'post', path: '/time/punches/renormalize' },
+  timeManualPunch: { method: 'post', path: '/time/punches/manual' },
 } as const;
 
 export type ContractKey = keyof typeof API_CONTRACT;
@@ -150,6 +183,76 @@ export interface RoleRow { id: string; key: string; name: string; isSystem: bool
 export interface AuditItem {
   id: string; occurredAt: string; actorUserId: string | null; action: string; module: string;
   recordType: string | null; recordId: string | null; result: string | null; reason: string | null;
+}
+
+// Temps & pointage (E10.1)
+export interface TimeModelRow {
+  id: string; code: string; labelFr: string; labelEn: string; kind: 'fixed' | 'rotation';
+  status: string; versionCount: number; lastEffectiveFrom: string | null; assignedToday: number;
+}
+export interface TimeScheduleDay {
+  dayIndex: number; isRest: boolean; startMinute: number | null; endMinute: number | null;
+  breakStartMinute: number | null; breakEndMinute: number | null; label: string | null;
+}
+export interface TimeModelDetail extends Omit<TimeModelRow, 'versionCount' | 'lastEffectiveFrom' | 'assignedToday'> {
+  versions: Array<{ id: string; version: number; effectiveFrom: string; cycleDays: number; notes: string | null; days: TimeScheduleDay[] }>;
+}
+export interface TimeAssignmentRow {
+  id: string; employeeId: string; matricule: string; firstName: string; lastName: string;
+  modelId: string; modelCode: string; modelLabelFr: string; modelLabelEn: string;
+  anchorDate: string; effectiveFrom: string; effectiveTo: string | null;
+}
+export interface TimeDeviceRow {
+  id: string; code: string; label: string; kind: string; status: string;
+  siteId: string | null; siteCode: string | null; timeZone: string | null; mappingCount: number;
+}
+export interface TimeMappingRow {
+  id: string; externalId: string; employeeId: string; matricule: string;
+  firstName: string; lastName: string; deviceId: string | null; deviceCode: string | null; status: string;
+}
+export interface TimeBatchRow {
+  id: string; source: string; filename: string | null; status: 'applied' | 'partial' | 'rejected';
+  atomic: boolean; createdAt: string; linesReceived: number; linesAccepted: number;
+  linesDuplicated: number; linesRejected: number; linesUnmatched: number;
+  fileSha256: string | null; fileKept: boolean; createdByEmail: string | null;
+}
+export interface TimeBatchDetail extends TimeBatchRow {
+  errorReport: Array<{ line: number; error: string }>;
+  columnMapping: Record<string, string>;
+}
+export interface TimeRawPunchRow {
+  id: string; batchId: string; lineNo: number | null; externalEmployeeId: string;
+  sourceDateTimeRaw: string; sourceTz: string | null; eventTypeRaw: string | null;
+  deviceRef: string | null; deviceCode: string | null; receivedAt: string;
+  matchStatus: string | null; eventType: string | null; occurredAt: string | null;
+  localDate: string | null; localTime: string | null; tz: string | null; note: string | null;
+  matricule: string | null; firstName: string | null; lastName: string | null;
+}
+export interface TimeMyEventRow {
+  id: string; occurredAt: string | null; localDate: string | null; localTime: string | null;
+  tz: string; eventType: string; matchStatus: string; deviceCode: string | null; siteCode: string | null;
+}
+export interface TimeUnmatchedRow {
+  id: string; rawPunchId: string; matchStatus: string; note: string | null;
+  localDate: string | null; localTime: string | null; tz: string | null;
+  externalEmployeeId: string; sourceDateTimeRaw: string; batchId: string; deviceCode: string | null;
+  matricule: string | null; firstName: string | null; lastName: string | null;
+}
+export interface TimeImportResult {
+  kind: 'preview' | 'applied' | 'partial' | 'rejected';
+  batchId?: string;
+  counts: { received: number; accepted: number; duplicated: number; rejected: number; unmatched: number };
+  errors: Array<{ line: number; error: string }>;
+  effective?: Record<string, string>;
+  wouldApply?: boolean;
+}
+export interface TimeEmployeeSchedule {
+  assigned: boolean;
+  date?: string; modelCode?: string; modelLabelFr?: string; modelLabelEn?: string; modelKind?: string;
+  applicableVersion?: number | null; versionEffectiveFrom?: string; cycleDays?: number;
+  anchorDate?: string; dayIndex?: number; day?: TimeScheduleDay | null;
+  exception?: { kind: string; startMinute: number | null; endMinute: number | null; labelFr: string; labelEn: string; target: string } | null;
+  holidays?: Array<{ labelFr: string; labelEn: string; calendarCode: string }>;
 }
 
 // ---------------------------------------------------------------------------

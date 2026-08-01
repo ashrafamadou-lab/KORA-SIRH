@@ -44,6 +44,19 @@ export const NAV_MAP: NavSection[] = [
     ],
   },
   {
+    labelKey: 'nav.time',
+    items: [
+      { route: '/time/schedules', labelKey: 'nav.timeSchedules', anyOf: ['time.schedules_view', 'time.schedules_manage', 'time.schedules_assign'], icon: 'clock' },
+      { route: '/time/assignments', labelKey: 'nav.timeAssignments', anyOf: ['time.schedules_assign', 'time.schedules_view'], icon: 'calendar' },
+      { route: '/time/import', labelKey: 'nav.timeImport', anyOf: ['time.punches_import'], icon: 'upload' },
+      { route: '/time/batches', labelKey: 'nav.timeBatches', anyOf: ['time.punches_view_errors', 'time.punches_import'], icon: 'layers' },
+      { route: '/time/punches', labelKey: 'nav.timePunches', anyOf: ['time.punches_view'], icon: 'fingerprint' },
+      { route: '/time/unmatched', labelKey: 'nav.timeUnmatched', anyOf: ['time.punches_view_errors', 'time.punches_import', 'time.devices_manage'], icon: 'alert' },
+      { route: '/time/devices', labelKey: 'nav.timeDevices', anyOf: ['time.devices_manage'], icon: 'device' },
+      { route: '/time/mine', labelKey: 'nav.timeMine', anyOf: ['time.punches_view_own'], icon: 'stamp' },
+    ],
+  },
+  {
     labelKey: 'nav.admin',
     items: [
       { route: '/admin/users', labelKey: 'nav.adminUsers', anyOf: ['users.view'], icon: 'shield' },

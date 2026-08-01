@@ -60,7 +60,9 @@ const routesDemo = {
     tenantId: uid(900), userId: uid(500), sessionId: uid(901), email: 'demo.rh@sbt.bj',
     permissions: ['employees.view', 'employees.view_private', 'employees.view_identifiers', 'employees.view_documents',
       'employees.view_history', 'workflow.view', 'workflow.act', 'org.view', 'users.view', 'users.create',
-      'users.manage_roles', 'sessions.revoke', 'audit.view', 'audit.export', 'parameters.view'],
+      'users.manage_roles', 'sessions.revoke', 'audit.view', 'audit.export', 'parameters.view',
+      'time.schedules_view', 'time.schedules_manage', 'time.schedules_assign', 'time.punches_import',
+      'time.punches_view', 'time.punches_view_errors', 'time.punches_view_own', 'time.devices_manage'],
     scopes: [{ type: 'tenant', ref: null }], roles: [{ key: 'rh-admin', name: 'Administrateur RH' }],
     locale: 'fr', mfaEnabled: true, tenant: T,
   }),
@@ -125,6 +127,80 @@ const routesDemo = {
       { id: '9001', occurredAt: '2026-08-01T09:14:00Z', actorUserId: uid(500), action: 'employee_private_viewed', module: 'hr', recordType: 'employee', recordId: uid(100), result: 'success', reason: null },
       { id: '9000', occurredAt: '2026-08-01T09:12:00Z', actorUserId: uid(500), action: 'login', module: 'auth', recordType: 'user', recordId: uid(500), result: 'success', reason: null },
     ], nextCursor: null,
+  }),
+  // ---------- Temps & pointage (E10.1) — données de DÉMONSTRATION ----------
+  'GET /time/schedules/models': () => ({ items: [
+    { id: uid(600), code: 'ADMIN-JOUR', labelFr: 'Administratif jour', labelEn: 'Office day', kind: 'fixed', status: 'active', versionCount: 1, lastEffectiveFrom: '2025-01-01', assignedToday: 14 },
+    { id: uid(601), code: 'ROT-NUIT-4', labelFr: 'Rotation nuit 4 jours', labelEn: '4-day night rotation', kind: 'rotation', status: 'active', versionCount: 2, lastEffectiveFrom: '2026-09-01', assignedToday: 6 },
+  ] }),
+  [`GET /time/schedules/models/${uid(601)}`]: () => ({ model: {
+    id: uid(601), code: 'ROT-NUIT-4', labelFr: 'Rotation nuit 4 jours', labelEn: '4-day night rotation', kind: 'rotation', status: 'active',
+    versions: [
+      { id: uid(610), version: 1, effectiveFrom: '2025-06-01', cycleDays: 4, notes: null, days: [
+        { dayIndex: 0, isRest: false, startMinute: 1320, endMinute: 1800, breakStartMinute: null, breakEndMinute: null, label: 'Nuit' },
+        { dayIndex: 1, isRest: false, startMinute: 480, endMinute: 1020, breakStartMinute: 720, breakEndMinute: 780, label: null },
+        { dayIndex: 2, isRest: true, startMinute: null, endMinute: null, breakStartMinute: null, breakEndMinute: null, label: null },
+        { dayIndex: 3, isRest: true, startMinute: null, endMinute: null, breakStartMinute: null, breakEndMinute: null, label: null },
+      ] },
+      { id: uid(611), version: 2, effectiveFrom: '2026-09-01', cycleDays: 4, notes: 'Pause déplacée (accord d’équipe).', days: [
+        { dayIndex: 0, isRest: false, startMinute: 1320, endMinute: 1800, breakStartMinute: null, breakEndMinute: null, label: 'Nuit' },
+        { dayIndex: 1, isRest: false, startMinute: 480, endMinute: 1020, breakStartMinute: 750, breakEndMinute: 810, label: null },
+        { dayIndex: 2, isRest: true, startMinute: null, endMinute: null, breakStartMinute: null, breakEndMinute: null, label: null },
+        { dayIndex: 3, isRest: true, startMinute: null, endMinute: null, breakStartMinute: null, breakEndMinute: null, label: null },
+      ] },
+    ],
+  } }),
+  'GET /time/schedules/assignments': () => ({ items: [
+    { id: uid(620), employeeId: uid(100), matricule: 'SBT-0001', firstName: 'Awa', lastName: 'Sossou', modelId: uid(601), modelCode: 'ROT-NUIT-4', modelLabelFr: 'Rotation nuit 4 jours', modelLabelEn: '4-day night rotation', anchorDate: '2026-01-05', effectiveFrom: '2026-01-05', effectiveTo: null },
+    { id: uid(621), employeeId: uid(101), matricule: 'SBT-0002', firstName: 'Bio', lastName: 'Kassim', modelId: uid(600), modelCode: 'ADMIN-JOUR', modelLabelFr: 'Administratif jour', modelLabelEn: 'Office day', anchorDate: '2025-01-06', effectiveFrom: '2025-01-06', effectiveTo: '2026-06-01' },
+  ] }),
+  'GET /time/devices': () => ({ items: [
+    { id: uid(630), code: 'PTR-HALL', label: 'Pointeuse hall d’entrée', kind: 'clock', status: 'active', siteId: null, siteCode: 'COT-SIEGE', timeZone: null, mappingCount: 42 },
+    { id: uid(631), code: 'IMPORT-RH', label: 'Fichiers du prestataire de gardiennage', kind: 'csv', status: 'active', siteId: null, siteCode: null, timeZone: null, mappingCount: 0 },
+  ] }),
+  'GET /time/mappings': () => ({ items: [
+    { id: uid(640), externalId: 'BADGE-0142', employeeId: uid(100), matricule: 'SBT-0001', firstName: 'Awa', lastName: 'Sossou', deviceId: uid(630), deviceCode: 'PTR-HALL', status: 'active' },
+    { id: uid(641), externalId: 'GARD-77', employeeId: uid(101), matricule: 'SBT-0002', firstName: 'Bio', lastName: 'Kassim', deviceId: null, deviceCode: null, status: 'active' },
+  ] }),
+  'GET /time/batches': () => ({ items: [
+    { id: uid(650), source: 'csv', filename: 'pointages-juillet.csv', status: 'applied', atomic: true, createdAt: '2026-08-01T06:10:00Z', linesReceived: 1240, linesAccepted: 1237, linesDuplicated: 3, linesRejected: 0, linesUnmatched: 2, fileSha256: 'a'.repeat(64), fileKept: true, createdByEmail: 'demo.rh@sbt.bj' },
+    { id: uid(651), source: 'xlsx', filename: 'gardiennage-s30.xlsx', status: 'rejected', atomic: true, createdAt: '2026-07-28T09:02:00Z', linesReceived: 88, linesAccepted: 0, linesDuplicated: 0, linesRejected: 5, linesUnmatched: 0, fileSha256: 'b'.repeat(64), fileKept: true, createdByEmail: 'demo.rh@sbt.bj' },
+  ] }),
+  [`GET /time/batches/${uid(650)}`]: () => ({ batch: {
+    id: uid(650), source: 'csv', filename: 'pointages-juillet.csv', status: 'applied', atomic: true, createdAt: '2026-08-01T06:10:00Z',
+    linesReceived: 1240, linesAccepted: 1237, linesDuplicated: 3, linesRejected: 0, linesUnmatched: 2,
+    errorReport: [], columnMapping: { matricule: 'external_id', dateheure: 'datetime', sens: 'event_type' },
+    fileSha256: 'a'.repeat(64), fileKept: true, createdByEmail: 'demo.rh@sbt.bj',
+  } }),
+  'GET /time/punches/raw': () => ({ items: [
+    { id: uid(660), batchId: uid(650), lineNo: 2, externalEmployeeId: 'BADGE-0142', sourceDateTimeRaw: '2026-07-31 22:03', sourceTz: null, eventTypeRaw: 'E', deviceRef: 'PTR-HALL', deviceCode: 'PTR-HALL', receivedAt: '2026-08-01T06:10:01Z', matchStatus: 'matched', eventType: 'in', occurredAt: '2026-07-31T21:03:00Z', localDate: '2026-07-31', localTime: '22:03:00', tz: 'Africa/Porto-Novo', note: null, matricule: 'SBT-0001', firstName: 'Awa', lastName: 'Sossou' },
+    { id: uid(661), batchId: uid(650), lineNo: 3, externalEmployeeId: 'BADGE-0142', sourceDateTimeRaw: '2026-08-01 06:01', sourceTz: null, eventTypeRaw: 'S', deviceRef: 'PTR-HALL', deviceCode: 'PTR-HALL', receivedAt: '2026-08-01T06:10:01Z', matchStatus: 'matched', eventType: 'out', occurredAt: '2026-08-01T05:01:00Z', localDate: '2026-08-01', localTime: '06:01:00', tz: 'Africa/Porto-Novo', note: null, matricule: 'SBT-0001', firstName: 'Awa', lastName: 'Sossou' },
+    { id: uid(662), batchId: uid(650), lineNo: 9, externalEmployeeId: 'GARD-112', sourceDateTimeRaw: '2026-07-31 18:00', sourceTz: null, eventTypeRaw: 'E', deviceRef: null, deviceCode: null, receivedAt: '2026-08-01T06:10:01Z', matchStatus: 'unmatched_employee', eventType: 'in', occurredAt: '2026-07-31T17:00:00Z', localDate: '2026-07-31', localTime: '18:00:00', tz: 'Africa/Porto-Novo', note: null, matricule: null, firstName: null, lastName: null },
+  ] }),
+  'GET /time/punches/unmatched': () => ({ items: [
+    { id: uid(670), rawPunchId: uid(662), matchStatus: 'unmatched_employee', note: null, localDate: '2026-07-31', localTime: '18:00:00', tz: 'Africa/Porto-Novo', externalEmployeeId: 'GARD-112', sourceDateTimeRaw: '2026-07-31 18:00', batchId: uid(650), deviceCode: null, matricule: null, firstName: null, lastName: null },
+    { id: uid(671), rawPunchId: uid(663), matchStatus: 'not_yet_hired', note: 'pointage antérieur à la date d’embauche (2026-12-01)', localDate: '2026-07-30', localTime: '08:00:00', tz: 'Africa/Porto-Novo', externalEmployeeId: 'SBT-0009', sourceDateTimeRaw: '2026-07-30 08:00', batchId: uid(650), deviceCode: 'PTR-HALL', matricule: 'SBT-0009', firstName: 'Nadia', lastName: 'Gbaguidi' },
+  ] }),
+  'GET /time/punches/mine': () => ({ linked: true, items: [
+    { id: uid(680), occurredAt: '2026-07-31T21:03:00Z', localDate: '2026-07-31', localTime: '22:03:00', tz: 'Africa/Porto-Novo', eventType: 'in', matchStatus: 'matched', deviceCode: 'PTR-HALL', siteCode: 'COT-SIEGE' },
+    { id: uid(681), occurredAt: '2026-08-01T05:01:00Z', localDate: '2026-08-01', localTime: '06:01:00', tz: 'Africa/Porto-Novo', eventType: 'out', matchStatus: 'matched', deviceCode: 'PTR-HALL', siteCode: 'COT-SIEGE' },
+  ] }),
+  'GET /org/sites': () => ([{ id: uid(2), code: 'COT-SIEGE', labelFr: 'Siège Cotonou', labelEn: 'Cotonou HQ', status: 'active' }]),
+  'POST /time/punches/import': () => ({
+    kind: 'preview',
+    counts: { received: 3, accepted: 2, duplicated: 1, rejected: 0, unmatched: 1 },
+    errors: [], effective: { matricule: 'external_id', dateheure: 'datetime', sens: 'event_type' },
+    wouldApply: true,
+  }),
+  'POST /time/punches/renormalize': () => ({ processed: 2, matched: 1 }),
+  [`GET /time/employees/${uid(100)}/schedule`]: (q) => ({
+    assigned: true, date: q.get('date') ?? '2026-07-01', modelCode: 'ROT-NUIT-4',
+    modelLabelFr: 'Rotation nuit 4 jours', modelLabelEn: '4-day night rotation', modelKind: 'rotation',
+    applicableVersion: 1, versionEffectiveFrom: '2025-06-01', cycleDays: 4, anchorDate: '2026-01-05',
+    dayIndex: 0,
+    day: { dayIndex: 0, isRest: false, startMinute: 1320, endMinute: 1800, breakStartMinute: null, breakEndMinute: null, label: 'Nuit' },
+    exception: null,
+    holidays: [{ labelFr: 'Fête nationale', labelEn: 'National day', calendarCode: 'FERIES-BJ' }],
   }),
 };
 

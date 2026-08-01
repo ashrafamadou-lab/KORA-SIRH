@@ -941,6 +941,250 @@ export const OPENAPI_SPEC = {
         responses: { '200': { description: '[{ id, key, name, isSystem, permissions[] }]' }, '403': err('Permission absente') },
       },
     },
+    // ---------------- Temps & pointage (E10.1) ----------------
+    '/time/schedules/models': {
+      get: {
+        summary: 'Modèles d’horaires (fixes et rotations) — time.schedules_view',
+        security: bearer,
+        responses: { '200': { description: '{ items: [{ id, code, labels, kind, status, versionCount, assignedToday }] }' }, '403': err('Permission absente') },
+      },
+      post: {
+        summary: 'Créer un modèle d’horaire — time.schedules_manage, audité',
+        security: bearer,
+        responses: { '201': { description: '{ id }' }, '409': err('Code déjà utilisé') },
+      },
+    },
+    '/time/schedules/models/{id}': {
+      get: {
+        summary: 'Détail d’un modèle : versions datées et jours de cycle — time.schedules_view',
+        description: 'end_minute > 1440 = la plage se termine LE LENDEMAIN (nuit traversant minuit, sans ambiguïté).',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: 'Modèle + versions + jours' }, '404': err('Introuvable') },
+      },
+    },
+    '/time/schedules/models/{id}/retire': {
+      post: {
+        summary: 'Retirer un modèle (refusé si affectations en cours) — time.schedules_manage, audité',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: 'Retiré' }, '409': err('Affectations en cours') },
+      },
+    },
+    '/time/schedules/models/{id}/versions': {
+      post: {
+        summary: 'Nouvelle VERSION d’un modèle (cycle complet requis) — time.schedules_manage, audité',
+        description:
+          'Le passé est FIGÉ par la base : une version ne peut être ni passée, ni antérieure à la dernière, ni ' +
+          'réécrite. Chaque jour du cycle est décrit (repos ou plage en minutes ; pause facultative bornée).',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '201': { description: '{ id, version }' }, '400': err('Cycle incomplet, plage ambiguë ou date passée') },
+      },
+    },
+    '/time/schedules/assignments': {
+      get: {
+        summary: 'Affectations d’horaires (filtres salarié/unité/date) — time.schedules_view',
+        security: bearer,
+        responses: { '200': { description: '{ items }' }, '403': err('Permission absente') },
+      },
+      post: {
+        summary: 'Affecter un horaire à UN salarié (anchor_date = jour 0 du cycle) — time.schedules_assign, audité',
+        description: 'Chevauchement rejeté PAR POSTGRESQL (contrainte d’exclusion) ⇒ 409. closePrevious clôt l’affectation ouverte.',
+        security: bearer,
+        responses: { '201': { description: '{ id }' }, '409': err('Chevauchement d’affectations') },
+      },
+    },
+    '/time/schedules/assignments/by-unit': {
+      post: {
+        summary: 'Affectation COLLECTIVE : tous les salariés actifs de l’unité à la date — time.schedules_assign, audité',
+        security: bearer,
+        responses: { '200': { description: '{ assigned, skipped }' }, '404': err('Modèle inconnu') },
+      },
+    },
+    '/time/schedules/assignments/{id}/close': {
+      post: {
+        summary: 'Clore une affectation d’horaire (close-only : jamais de réécriture) — time.schedules_assign, audité',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: 'Close' }, '409': err('Déjà close') },
+      },
+    },
+    '/time/employees/{id}/schedule': {
+      get: {
+        summary: 'Horaire APPLICABLE à une date : version datée, jour de cycle, exception, fériés — time.schedules_view (portée)',
+        description: 'Une modification future d’horaire ne change JAMAIS le résultat pour une date passée (versions immuables).',
+        security: bearer,
+        parameters: [
+          { name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+          { name: 'date', in: 'query', required: false, schema: { type: 'string', format: 'date' } },
+        ],
+        responses: { '200': { description: '{ assigned, modelCode, applicableVersion, dayIndex, day, exception, holidays }' }, '404': err('Hors périmètre') },
+      },
+    },
+    '/time/holidays': {
+      get: {
+        summary: 'Calendriers et jours fériés (versionnés : retrait = statut, jamais d’effacement) — time.schedules_view',
+        security: bearer,
+        responses: { '200': { description: '{ calendars, holidays }' }, '403': err('Permission absente') },
+      },
+      post: {
+        summary: 'Ajouter un jour férié — time.schedules_manage, audité',
+        security: bearer,
+        responses: { '201': { description: '{ id }' }, '409': err('Date déjà fériée') },
+      },
+    },
+    '/time/holidays/calendars': {
+      post: {
+        summary: 'Créer un calendrier de fériés (portée tenant, société, site OU unité) — time.schedules_manage, audité',
+        security: bearer,
+        responses: { '201': { description: '{ id }' }, '409': err('Code déjà utilisé') },
+      },
+    },
+    '/time/holidays/{id}/retire': {
+      post: {
+        summary: 'Retirer un jour férié (statut, ligne conservée) — time.schedules_manage, audité',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: 'Retiré' }, '404': err('Introuvable') },
+      },
+    },
+    '/time/exceptions': {
+      get: {
+        summary: 'Exceptions de planning (fermetures, horaires spéciaux) — time.schedules_view',
+        security: bearer,
+        responses: { '200': { description: '{ items }' }, '403': err('Permission absente') },
+      },
+      post: {
+        summary: 'Créer une exception individuelle OU collective (une seule cible) — time.schedules_manage, audité',
+        security: bearer,
+        responses: { '201': { description: '{ id }' }, '400': err('Cible ou plage invalide') },
+      },
+    },
+    '/time/exceptions/{id}/retire': {
+      post: {
+        summary: 'Retirer une exception — time.schedules_manage, audité',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: 'Retirée' }, '404': err('Introuvable') },
+      },
+    },
+    '/time/devices': {
+      get: {
+        summary: 'Dispositifs de pointage (pointeuses, sources) — exploitation temps',
+        description: 'KORA ne stocke AUCUNE donnée biométrique : identifiant externe, horodatage, dispositif, référence technique seulement.',
+        security: bearer,
+        responses: { '200': { description: '{ items }' }, '403': err('Permission absente') },
+      },
+      post: {
+        summary: 'Déclarer un dispositif — time.devices_manage, audité',
+        security: bearer,
+        responses: { '201': { description: '{ id }' }, '409': err('Code déjà utilisé') },
+      },
+    },
+    '/time/devices/{id}': {
+      patch: {
+        summary: 'Modifier un dispositif (libellé, statut, site, fuseau) — time.devices_manage, audité',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: 'Modifié' }, '404': err('Introuvable') },
+      },
+    },
+    '/time/mappings': {
+      get: {
+        summary: 'Correspondances identifiant externe ↔ salarié — exploitation temps',
+        security: bearer,
+        responses: { '200': { description: '{ items }' }, '403': err('Permission absente') },
+      },
+      post: {
+        summary: 'Relier un identifiant externe à un salarié DU tenant — time.devices_manage, audité',
+        description: 'Une correspondance vers un salarié d’un autre tenant est rejetée PAR POSTGRESQL (FK composite).',
+        security: bearer,
+        responses: { '201': { description: '{ id }' }, '409': err('Identifiant déjà relié') },
+      },
+    },
+    '/time/mappings/{id}/retire': {
+      post: {
+        summary: 'Retirer une correspondance — time.devices_manage, audité',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: 'Retirée' }, '404': err('Introuvable') },
+      },
+    },
+    '/time/punches/import': {
+      post: {
+        summary: 'Import de pointages CSV/Excel (preview SANS écriture | apply ATOMIQUE, partiel EXPLICITE) — time.punches_import, audité',
+        description:
+          'Correspondance de colonnes auto-détectée FR/EN ou explicite (mapping). Idempotence par empreinte ' +
+          'canonique : rejouer un fichier, ou recevoir le même événement par deux fichiers, ne crée qu’UNE ligne ' +
+          'brute (compteur « dupliqué »). Mode atomique (défaut) : la moindre ligne invalide ⇒ lot rejeté tracé, ' +
+          'ZÉRO écriture ; acceptOnlyValid=true (choix EXPLICITE) n’écrit que les lignes valides. Les cellules ' +
+          'Excel à FORMULE sont refusées : rien n’est jamais interprété. Échec d’application ⇒ notification E5 ' +
+          'aux porteurs de la permission (modèle time_import_echec).',
+        security: bearer,
+        responses: { '200': { description: '{ kind: preview|applied|partial|rejected, counts, errors[] }' }, '400': err('Fichier ou correspondance invalide') },
+      },
+    },
+    '/time/batches': {
+      get: {
+        summary: 'Lots d’import (compteurs reçu/accepté/dupliqué/rejeté/non apparié) — time.punches_view_errors',
+        security: bearer,
+        responses: { '200': { description: '{ items }' }, '403': err('Permission absente') },
+      },
+    },
+    '/time/batches/{id}': {
+      get: {
+        summary: 'Détail d’un lot : rapport d’erreurs PAR LIGNE, correspondance appliquée — time.punches_view_errors',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ batch }' }, '404': err('Introuvable') },
+      },
+    },
+    '/time/batches/{id}/file': {
+      get: {
+        summary: 'Fichier original du lot (référence documentaire) — time.punches_import, accès AUDITÉ',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ filename, contentBase64, sha256 }' }, '409': err('Fichier non conservé') },
+      },
+    },
+    '/time/punches/raw': {
+      get: {
+        summary: 'Registre BRUT (append-only) avec l’événement normalisé lié — time.punches_view, PORTÉE réelle',
+        description: 'Portée fine : seuls les pointages des salariés du périmètre (affectation à la date) sont rendus.',
+        security: bearer,
+        responses: { '200': { description: '{ items }' }, '403': err('Permission absente') },
+      },
+    },
+    '/time/punches/mine': {
+      get: {
+        summary: 'MES événements de pointage (lien utilisateur ↔ salarié) — time.punches_view_own',
+        security: bearer,
+        responses: { '200': { description: '{ linked, items }' }, '403': err('Permission absente') },
+      },
+    },
+    '/time/punches/unmatched': {
+      get: {
+        summary: 'File des événements NON appariés (identifiant inconnu, salarié inactif, horodatage invalide…) — time.punches_view_errors',
+        security: bearer,
+        responses: { '200': { description: '{ items }' }, '403': err('Permission absente') },
+      },
+    },
+    '/time/punches/renormalize': {
+      post: {
+        summary: 'Renormaliser les événements non appariés (après ajout de correspondance) — time.punches_import, audité',
+        description: 'Ne touche JAMAIS le brut : seuls les événements dérivés sont recalculés.',
+        security: bearer,
+        responses: { '200': { description: '{ processed, matched }' }, '403': err('Permission absente') },
+      },
+    },
+    '/time/punches/manual': {
+      post: {
+        summary: 'Saisie MANUELLE d’un pointage (lot source=manual, idempotente, auditée) — time.punches_import',
+        security: bearer,
+        responses: { '201': { description: '{ batchId, rawPunchId, matchStatus }' }, '409': err('Pointage identique déjà enregistré') },
+      },
+    },
     '/openapi.json': {
       get: { summary: 'Cette spécification', responses: { '200': { description: 'OpenAPI 3.0.3' } } },
     },
