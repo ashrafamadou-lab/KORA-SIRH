@@ -1,0 +1,27 @@
+# Génération MANUELLE du package-lock.json (workflow_dispatch uniquement).
+# Aucune permission d'écriture : le lockfile est publié en ARTEFACT ; un humain le
+# télécharge, le vérifie et le committe lui-même à la racine du dépôt.
+# Usage : onglet Actions → « Générer le lockfile (manuel) » → Run workflow →
+# télécharger l'artefact « package-lock » → committer le fichier à la racine.
+name: Générer le lockfile (manuel)
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lockfile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '>=22.18 <23'
+      - name: Résoudre l'arbre de dépendances (sans installer)
+        run: npm install --package-lock-only --no-audit --no-fund
+      - uses: actions/upload-artifact@v7
+        with:
+          name: package-lock
+          path: package-lock.json
+          if-no-files-found: error

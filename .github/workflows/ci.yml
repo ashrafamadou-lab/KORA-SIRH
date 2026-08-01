@@ -96,8 +96,6 @@ jobs:
 
   api:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write   # bootstrap du lockfile (commit [skip ci]) — voir l'étape dédiée
     services:
       postgres:
         image: postgres:16
@@ -130,20 +128,17 @@ jobs:
       - name: Migrations
         run: bash infra/db/migrate.sh
 
-      - name: Dépendances (npm ci reproductible ; npm install en bootstrap unique)
-        id: deps
-        # Revue sponsor n° 1 : npm ci dès qu'un lockfile existe. Le sandbox de
-        # développement n'ayant pas accès au registre npm, le lockfile est généré ICI
-        # au premier run (workspaces → lockfile racine) puis committé par l'étape
-        # finale ; tous les runs suivants passent par npm ci.
+      - name: Dépendances (npm ci strict — lockfile committé requis)
+        # Revue sponsor : builds reproductibles uniquement. Pas de npm install, pas de
+        # bootstrap, pas d'écriture sur main depuis la CI. Le lockfile se génère hors CI
+        # (npm install --package-lock-only à la racine, ou workflow manuel « lockfile »
+        # qui le publie en artefact à committer soi-même).
         run: |
-          if [ -f package-lock.json ]; then
-            npm ci --no-audit --no-fund
-            echo "generated=false" >> "$GITHUB_OUTPUT"
-          else
-            npm install --no-audit --no-fund
-            echo "generated=true" >> "$GITHUB_OUTPUT"
+          if [ ! -f package-lock.json ]; then
+            echo "::error::package-lock.json absent — le générer et le committer avant la CI (voir README)"
+            exit 1
           fi
+          npm ci --no-audit --no-fund
 
       - name: Client Prisma
         run: cd apps/api && npx prisma generate
@@ -153,12 +148,3 @@ jobs:
 
       - name: E2E auth (login, sessions, verrouillage atomique, désactivation, audit)
         run: cd apps/api && node --test dist/apps/api/test/
-
-      - name: Bootstrap du lockfile (commit unique, [skip ci])
-        if: steps.deps.outputs.generated == 'true' && github.ref == 'refs/heads/main' && success()
-        run: |
-          git config user.name "kora-ci"
-          git config user.email "ci@users.noreply.github.com"
-          git add package-lock.json
-          git commit -m "CI bootstrap : package-lock.json généré par le job api — npm ci désormais [skip ci]"
-          git push
