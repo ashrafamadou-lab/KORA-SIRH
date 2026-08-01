@@ -53,6 +53,11 @@ export const OPENAPI_SPEC = {
             maxLength: 16,
             description: 'TOTP 6 chiffres ou code de récupération XXXX-XXXX (si MFA activé)',
           },
+          tokenTransport: {
+            type: 'string',
+            enum: ['body', 'cookie'],
+            description: 'body (défaut, clients d’API) : jeton dans la réponse. cookie (PWA) : jeton UNIQUEMENT en cookie HttpOnly SameSite=Strict Path=/api (Secure si KORA_COOKIE_SECURE=1) — la réponse porte alors csrfToken (dérivé HMAC), à renvoyer en entête X-KORA-CSRF sur toute écriture authentifiée par cookie.',
+          },
         },
       },
       LoginReponse: {
@@ -128,7 +133,7 @@ export const OPENAPI_SPEC = {
     },
     '/auth/login': {
       post: {
-        summary: 'Connexion (mot de passe + MFA le cas échéant)',
+        summary: 'Connexion (mot de passe + MFA le cas échéant) — transport du jeton : body OU cookie HttpOnly + CSRF (clôture Phase 1)',
         requestBody: {
           required: true,
           content: {

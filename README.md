@@ -9,7 +9,7 @@ pas contresigné.
 ## État du repo — honnêteté d'abord
 
 **Incréments 1 à 3 validés (socle de données, auth E1/E2 + clôture, E3 Workflow Engine, E4 Config Center) — CI verte, artefacts publiés.**
-**E5 (SHA 13ae258c, run 30701148520), E6 (SHA 12c0dc37, run 30702827791), E8 (SHA 7a81ab08, run 30704366980) et E9 (SHA 34bd0a95, run 30706567690) validés. Tranche courante : E7 — PWA & i18n FR/EN — livrée, à prouver par la CI au prochain push (nouveau job `web`).**
+**E5 (13ae258c), E6 (12c0dc37), E8 (7a81ab08), E9 (34bd0a95) et E7 — PWA & i18n (SHA a9ed40a4, run 30708702840) validés. Tranche courante : durcissement & clôture Phase 1 (cookie HttpOnly + CSRF, job navigateur Playwright, en-têtes de production) — à prouver par la CI au prochain push (5 jobs).**
 
 | Composant | État |
 |---|---|
@@ -37,6 +37,27 @@ pas contresigné.
 | Frontend PWA (modules Présence, Congés, Paie, Recrutement) | ⛔ NOT IMPLEMENTED — attendus en Phase 2-3, jamais simulés |
 | CI GitHub Actions | ✅ `db-socle` validé sur GitHub ; jobs `core` et `api` (actions v6/v7, **Node ≥ 22.18 épinglé**) |
 | Lockfile npm (`package-lock.json`) | ⚠ **Requis committé à la racine avant la CI** (le job `api` refuse de tourner sans, puis `npm ci` exclusivement — aucune écriture de la CI sur `main`). Génération : `npm install --package-lock-only` à la racine sur un poste avec accès registre, ou workflow manuel « Générer le lockfile » (artefact à committer soi-même) |
+
+## Sécurité de production (clôture Phase 1)
+
+**Session.** Le navigateur ne détient JAMAIS le jeton : `POST /auth/login` avec `tokenTransport: "cookie"` pose un cookie `kora_session` **HttpOnly, SameSite=Strict, Path=/api**, `Secure` dès que l'API tourne avec `KORA_COOKIE_SECURE=1` (production, derrière TLS). La réponse ne contient pas le jeton — uniquement un jeton **CSRF dérivé** (HMAC-SHA256 côté serveur, aucun état), gardé en mémoire par la PWA et rechargé via `/auth/me`. Toute écriture authentifiée par cookie exige l'entête `X-KORA-CSRF` (comparaison à temps constant) ; l'authentification Bearer des clients d'API reste inchangée et n'est pas CSRF-able. Révocation, désactivation et MFA conservent leur effet immédiat : le premier 401 purge l'état mémoire et ramène à la connexion. Aucun module client n'a le droit de toucher `sessionStorage`/`indexedDB`/`document.cookie` (lint CI) ; `localStorage` est borné au miroir de langue non sensible.
+
+**En-têtes.** L'API applique elle-même : `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'; base-uri 'none'`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Cross-Origin-Resource-Policy: same-origin` et **`Cache-Control: no-store`** (aucune donnée RH en cache navigateur/proxy). La coquille PWA est servie par `apps/web/scripts/serve.mjs` — le serveur de référence REELLEMENT exercé par le job `browser` — avec la CSP complète (`frame-ancestors 'none'`, `object-src 'none'`, `base-uri 'none'`, `form-action 'self'`), anti-sniffing, anti-clickjacking, `Referrer-Policy`, `Permissions-Policy`, et HSTS activable (`KORA_HSTS=1`, derrière TLS uniquement). Profils : développement = HTTP local sans `Secure`/HSTS ; production = TLS + `KORA_COOKIE_SECURE=1` + `KORA_HSTS=1`. Équivalent nginx :
+
+```nginx
+location /api/ { proxy_pass http://kora-api:3000; }
+location / {
+  root /srv/kora-web/dist; try_files $uri /index.html;
+  add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; manifest-src 'self'; worker-src 'self'" always;
+  add_header X-Content-Type-Options nosniff always;
+  add_header X-Frame-Options DENY always;
+  add_header Referrer-Policy no-referrer always;
+  add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
+  add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;  # TLS uniquement
+}
+```
+
+**Installation PWA.** Critères Chromium prouvés par le job `browser` (manifeste `standalone` + icônes `any`/`maskable` + service worker actif) ; la détection de nouvelle version et le rechargement proposé sont testés en réel (modification de `sw.js` → bandeau → bascule). Limites assumées : **iOS/Safari** installe via « Partager → Sur l'écran d'accueil » (pas d'invite automatique ; `maskable` ignoré, l'icône `any` est utilisée) ; **desktop** : l'invite native `beforeinstallprompt` n'existe que sur Chrome/Edge — Firefox n'installe pas de PWA desktop. Le mode hors ligne reste limité à la coquille sur toutes les plateformes : aucune donnée RH n'est disponible hors connexion, par conception.
 
 ## Structure
 

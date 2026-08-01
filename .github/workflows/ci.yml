@@ -1,7 +1,9 @@
-# CI KORA — trois jobs :
+# CI KORA — cinq jobs :
 #   db-socle : migrations + seed + tests SQL (psql pur) + artefacts d'exécution
 #   core     : domaine pur @kora/core (node:test, zéro dépendance)
-#   api      : build NestJS/Prisma + e2e auth contre PostgreSQL réel
+#   api      : build NestJS/Prisma + e2e contre PostgreSQL réel
+#   web      : build PWA (zéro dépendance, lockfile intact) + tests + intégration réelle
+#   browser  : parcours Playwright réels (cookie HttpOnly, CSRF, PWA, hors-ligne, stockages)
 # Validée sur GitHub le 01/08/2026 (job db-socle, run vert + artefacts) ; les jobs core
 # et api sont ajoutés par l'incrément 2 — le sandbox de développement n'ayant pas accès
 # au registre npm, cette CI est leur banc de preuve (ADR-003).
@@ -229,3 +231,77 @@ jobs:
           name: kora-pwa-dist-${{ github.sha }}
           path: apps/web/dist/
           if-no-files-found: error
+
+  browser:
+    # Tests NAVIGATEUR réels (clôture Phase 1) — Playwright ÉPINGLÉ, installé job-local
+    # (npm i --no-save : le lockfile racine reste INCHANGÉ ; l'entrée lockfile arrivera
+    # avec la prochaine vague de dépendances). Chaîne complète : serve.mjs (en-têtes de
+    # production + proxy même origine) → API compilée → PostgreSQL migré.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL_MIGRATOR: postgres://kora_migrator:kora_migrator_dev@127.0.0.1:5432/kora
+      DATABASE_URL_APP: postgres://kora_app:kora_app_dev@127.0.0.1:5432/kora
+      PGPASSWORD: postgres
+      KORA_MFA_KEY: a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90
+      PLAYWRIGHT_VERSION: 1.56.0
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '>=22.18 <23'
+
+      - name: Créer les rôles et la base
+        run: |
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE kora_migrator LOGIN PASSWORD 'kora_migrator_dev'" \
+            -c "CREATE ROLE kora_app LOGIN PASSWORD 'kora_app_dev' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS" \
+            -c "CREATE DATABASE kora OWNER kora_migrator"
+
+      - name: Migrations
+        run: bash infra/db/migrate.sh
+
+      - name: Dépendances (npm ci strict — lockfile INCHANGÉ)
+        run: npm ci --no-audit --no-fund
+
+      - name: Client Prisma + build API
+        run: |
+          cd apps/api
+          npx prisma generate
+          npx tsc -p tsconfig.json
+
+      - name: Build PWA
+        run: node apps/web/scripts/build.mjs
+
+      - name: Cache navigateur Playwright
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: pw-chromium-${{ env.PLAYWRIGHT_VERSION }}
+
+      - name: Playwright épinglé (job-local, hors lockfile) + Chromium
+        run: |
+          npm i --no-save --no-audit --no-fund playwright@${PLAYWRIGHT_VERSION}
+          npx playwright install --with-deps chromium
+
+      - name: Parcours navigateur (desktop + mobile, PWA, hors-ligne, stockages, en-têtes)
+        run: node --test apps/web/test-browser/*.e2e.test.mjs
+
+      - name: Captures d'échec (UNIQUEMENT si échec)
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: kora-browser-echecs-${{ github.sha }}
+          path: apps/web/test-results/
+          if-no-files-found: ignore

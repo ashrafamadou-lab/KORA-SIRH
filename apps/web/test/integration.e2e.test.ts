@@ -216,6 +216,79 @@ test('compte DÉSACTIVÉ : la session en cours meurt à la requête suivante', {
   psql(`UPDATE admin.users SET is_active = true WHERE id = '${viewerId}'`);
 });
 
+test('cookie HttpOnly (mode PWA) : jeton invisible du client, CSRF exigé, révocation intacte', { skip: !RUNNABLE }, async () => {
+  // Connexion en transport cookie — la réponse ne porte JAMAIS le jeton.
+  const loginRes = await fetch(`${base}/auth/login`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ tenantSlug: slug, email: adminEmail, password: P, tokenTransport: 'cookie' }),
+  });
+  assert.equal(loginRes.status, 200);
+  const setCookies = loginRes.headers.getSetCookie();
+  const sessionCookie = setCookies.find((c) => c.startsWith('kora_session='));
+  assert.ok(sessionCookie, 'cookie de session posé');
+  for (const attr of ['HttpOnly', 'SameSite=Strict', 'Path=/api', 'Max-Age=']) {
+    assert.ok(sessionCookie!.includes(attr), `attribut ${attr} attendu : ${sessionCookie}`);
+  }
+  const loginBody = (await loginRes.json()) as Record<string, unknown>;
+  assert.equal('token' in loginBody, false, 'le corps de réponse ne contient PAS le jeton');
+  assert.equal(typeof loginBody['csrfToken'], 'string', 'le jeton CSRF (dérivé) est remis');
+  const cookiePair = sessionCookie!.split(';')[0]!;
+  const csrf = loginBody['csrfToken'] as string;
+
+  // Lecture par cookie : OK, et /auth/me re-fournit le CSRF (rechargement d'onglet).
+  const me = await fetch(`${base}/auth/me`, { headers: { cookie: cookiePair } });
+  assert.equal(me.status, 200);
+  const meBody = (await me.json()) as { email: string; csrfToken?: string };
+  assert.equal(meBody.email, adminEmail);
+  assert.equal(meBody.csrfToken, csrf, 'même dérivation CSRF au rechargement');
+
+  // ÉCRITURE par cookie SANS entête CSRF : refusée (tentative CSRF simulée)…
+  const forged = await fetch(`${base}/notifications/preferences`, {
+    method: 'PUT', headers: { cookie: cookiePair, 'content-type': 'application/json' },
+    body: JSON.stringify({ locale: 'en' }),
+  });
+  assert.equal(forged.status, 403, 'écriture par cookie sans X-KORA-CSRF = 403');
+  // …avec un entête FAUX : refusée aussi…
+  const wrong = await fetch(`${base}/notifications/preferences`, {
+    method: 'PUT', headers: { cookie: cookiePair, 'content-type': 'application/json', 'x-kora-csrf': 'a'.repeat(48) },
+    body: JSON.stringify({ locale: 'en' }),
+  });
+  assert.equal(wrong.status, 403);
+  // …avec le bon entête : acceptée.
+  const legit = await fetch(`${base}/notifications/preferences`, {
+    method: 'PUT', headers: { cookie: cookiePair, 'content-type': 'application/json', 'x-kora-csrf': csrf },
+    body: JSON.stringify({ locale: 'fr' }),
+  });
+  assert.equal(legit.status, 200, 'écriture légitime (entête CSRF correct) acceptée');
+  // Le flux Bearer, non CSRF-able, reste inchangé (compatibilité E1→E9).
+  const { session } = makeSession();
+  assert.equal((await session.login(slug, adminEmail, P)).kind, 'ok');
+  await session.persistLocale('fr');
+  await session.logout();
+
+  // En-têtes de sécurité servis par l'API réellement testée.
+  for (const [name, expected] of [
+    ['x-content-type-options', 'nosniff'],
+    ['x-frame-options', 'DENY'],
+    ['referrer-policy', 'no-referrer'],
+    ['cache-control', 'no-store'],
+  ] as const) {
+    assert.equal(me.headers.get(name), expected, `entête ${name}`);
+  }
+  assert.ok(me.headers.get('content-security-policy')!.includes("frame-ancestors 'none'"));
+
+  // Déconnexion par cookie : le cookie est effacé ET la session révoquée — la
+  // réutilisation du cookie est IMMÉDIATEMENT rejetée.
+  const out = await fetch(`${base}/auth/logout`, {
+    method: 'POST', headers: { cookie: cookiePair, 'x-kora-csrf': csrf },
+  });
+  assert.equal(out.status, 204);
+  const cleared = out.headers.getSetCookie().find((c) => c.startsWith('kora_session='));
+  assert.ok(cleared && cleared.includes('Max-Age=0'), 'cookie effacé à la déconnexion');
+  assert.equal((await fetch(`${base}/auth/me`, { headers: { cookie: cookiePair } })).status, 401,
+    'session révoquée : le cookie volé ne sert plus à rien');
+});
+
 test('routes inexistantes et erreurs typées à travers le client', { skip: !RUNNABLE }, async () => {
   const { session } = makeSession();
   assert.equal((await session.login(slug, adminEmail, P)).kind, 'ok');

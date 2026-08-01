@@ -51,9 +51,12 @@ const EMP = [
 }));
 
 const routesDemo = {
-  'POST /auth/login': () => ({ token: 'k1.demo.jeton-simule', expiresAt: new Date(Date.now() + 864e5).toISOString(), user: { id: uid(500), email: 'demo.rh@sbt.bj' } }),
+  // Transport cookie (clôture Phase 1) : le jeton simulé part en HttpOnly, jamais
+  // dans le corps ; le CSRF de démonstration est fixe.
+  'POST /auth/login': () => ({ expiresAt: new Date(Date.now() + 864e5).toISOString(), user: { id: uid(500), email: 'demo.rh@sbt.bj' }, csrfToken: 'demo-csrf' }),
   'POST /auth/logout': () => null,
   'GET /auth/me': () => ({
+    csrfToken: 'demo-csrf',
     tenantId: uid(900), userId: uid(500), sessionId: uid(901), email: 'demo.rh@sbt.bj',
     permissions: ['employees.view', 'employees.view_private', 'employees.view_identifiers', 'employees.view_documents',
       'employees.view_history', 'workflow.view', 'workflow.act', 'org.view', 'users.view', 'users.create',
@@ -169,10 +172,23 @@ const server = createServer((req, res) => {
   const url = new URL(req.url ?? '/', `http://127.0.0.1:${port}`);
   if (url.pathname.startsWith('/api/v1')) {
     const sub = url.pathname.slice('/api/v1'.length) || '/';
+    // Le stub reproduit le contrat cookie : sans cookie de session, /auth/me = 401.
+    if (sub === '/auth/me' && !(req.headers.cookie ?? '').includes('kora_session=')) {
+      res.writeHead(401, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ statusCode: 401, message: 'authentification requise' }));
+      return;
+    }
     let payload = routesDemo[`${req.method} ${sub}`]?.(url.searchParams);
     if (payload === undefined) payload = employeeSubroutes(sub, url.searchParams);
     if (payload === undefined && req.method === 'POST') payload = {};
-    res.writeHead(payload === undefined ? 404 : payload === null ? 204 : 200, { 'content-type': 'application/json' });
+    const headers = { 'content-type': 'application/json' };
+    if (sub === '/auth/login' && req.method === 'POST') {
+      headers['set-cookie'] = 'kora_session=demo-jeton-simule; Max-Age=86400; Path=/api; HttpOnly; SameSite=Strict';
+    }
+    if (sub === '/auth/logout') {
+      headers['set-cookie'] = 'kora_session=; Max-Age=0; Path=/api; HttpOnly; SameSite=Strict';
+    }
+    res.writeHead(payload === undefined ? 404 : payload === null ? 204 : 200, headers);
     res.end(payload === undefined ? JSON.stringify({ message: 'demo: route inconnue' }) : payload === null ? undefined : JSON.stringify(payload));
     return;
   }

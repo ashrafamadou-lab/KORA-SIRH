@@ -8,10 +8,13 @@
  *  - ERREURS CENTRALISÉES : 401 ⇒ purge de session + redirection connexion (session
  *    révoquée ou compte désactivé = déconnexion IMMÉDIATE) ; 403/404/409/423/429/503
  *    remontent en ApiError typée, Retry-After interprété ; panne réseau ⇒ 'offline'.
- *  - SÉCURITÉ : le jeton vit en mémoire (+ sessionStorage d'onglet pour survivre au
- *    rechargement — JAMAIS localStorage, JAMAIS IndexedDB) ; le tenant est résolu par
- *    le SERVEUR à la connexion (slug saisi au login, jamais un tenant_id imposé) ;
- *    aucune donnée sensible n'est journalisée.
+ *  - SÉCURITÉ (clôture Phase 1) : le jeton de session vit dans un cookie HttpOnly
+ *    posé par le SERVEUR — le JavaScript du navigateur ne le voit JAMAIS et rien
+ *    n'est écrit dans localStorage/sessionStorage/IndexedDB ; seul le jeton CSRF
+ *    (dérivé, non secret de session) est gardé EN MÉMOIRE et envoyé en entête
+ *    X-KORA-CSRF sur chaque écriture ; le tenant est résolu par le SERVEUR à la
+ *    connexion (slug saisi au login, jamais un tenant_id imposé) ; aucune donnée
+ *    sensible n'est journalisée.
  */
 
 export type ApiErrorKind =
@@ -92,7 +95,8 @@ export type ContractKey = keyof typeof API_CONTRACT;
 // Types de réponses (miroir manuel du contrat OpenAPI servi par l'API)
 // ---------------------------------------------------------------------------
 
-export interface LoginResponse { token: string; expiresAt: string; user: { id: string; email: string } }
+/** Réponse de connexion en transport COOKIE : jamais de jeton de session. */
+export interface LoginResponse { expiresAt: string; user: { id: string; email: string }; csrfToken: string }
 export interface MeResponse {
   tenantId: string; userId: string; sessionId: string; email: string;
   permissions: string[];
@@ -101,6 +105,8 @@ export interface MeResponse {
   locale: 'fr' | 'en';
   mfaEnabled: boolean;
   tenant: { slug: string; name: string } | null;
+  /** Présent quand la session vient du cookie — recharge le CSRF en mémoire. */
+  csrfToken?: string;
 }
 export interface ActiveSession {
   id: string; createdAt: string; lastSeenAt: string; ip: string | null; userAgent: string | null; current: boolean;
@@ -158,8 +164,11 @@ export interface ApiClientOptions {
   fetchImpl?: typeof fetch;
 }
 
+const WRITE_METHODS = new Set(['post', 'put', 'patch', 'delete']);
+
 export class ApiClient {
-  private token: string | null = null;
+  /** Jeton CSRF dérivé — EN MÉMOIRE uniquement, jamais un secret de session. */
+  private csrf: string | null = null;
   private readonly baseUrl: string;
   private readonly onUnauthorized: (() => void) | null;
   private readonly fetchImpl: typeof fetch;
@@ -170,11 +179,11 @@ export class ApiClient {
     this.fetchImpl = opts.fetchImpl ?? fetch.bind(globalThis);
   }
 
-  setToken(token: string | null): void {
-    this.token = token;
+  setCsrf(token: string | null): void {
+    this.csrf = token;
   }
-  hasToken(): boolean {
-    return this.token !== null;
+  hasCsrf(): boolean {
+    return this.csrf !== null;
   }
 
   /** Construit l'URL d'une entrée du contrat (les segments {x} sont encodés). */
@@ -203,9 +212,11 @@ export class ApiClient {
     try {
       res = await this.fetchImpl(url, {
         method: method.toUpperCase(),
+        // Le cookie HttpOnly voyage tout seul, même origine uniquement.
+        credentials: 'same-origin',
         headers: {
           ...(opts.body !== undefined ? { 'content-type': 'application/json' } : {}),
-          ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
+          ...(WRITE_METHODS.has(method) && this.csrf ? { 'x-kora-csrf': this.csrf } : {}),
         },
         body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
       });
@@ -230,10 +241,7 @@ export class ApiClient {
     const url = this.url(key, {}, query);
     let res: Response;
     try {
-      res = await this.fetchImpl(url, {
-        method: 'GET',
-        headers: this.token ? { authorization: `Bearer ${this.token}` } : {},
-      });
+      res = await this.fetchImpl(url, { method: 'GET', credentials: 'same-origin' });
     } catch {
       throw new ApiError('offline', 0, 'offline');
     }

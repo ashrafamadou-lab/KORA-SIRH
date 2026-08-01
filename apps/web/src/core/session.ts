@@ -1,20 +1,19 @@
 /**
- * Session (E7) — un seul endroit qui touche au jeton.
+ * Session (clôture Phase 1) — AUCUN jeton côté client.
  *
- *  - Jeton opaque k1.* en MÉMOIRE + sessionStorage D'ONGLET (survit au rechargement,
- *    meurt avec l'onglet) — JAMAIS localStorage, JAMAIS IndexedDB, JAMAIS cookie posé
- *    par le client. Compromis documenté : la CSP stricte et le rendu textContent
- *    réduisent la surface XSS ; la session côté cookie httpOnly est une évolution
- *    serveur planifiée.
- *  - purge() efface jeton ET profil en mémoire, le miroir d'onglet, et prévient les
- *    abonnés — appelée à la déconnexion ET sur tout 401 (révocation, désactivation).
- *  - Le tenant est résolu par le SERVEUR au login (slug) puis porté par la session ;
- *    le client n'envoie jamais de tenant_id.
+ *  - Le jeton de session vit dans un cookie HttpOnly posé par le SERVEUR
+ *    (SameSite=Strict, Path=/api, Secure en production) : le JavaScript du navigateur
+ *    ne peut pas le lire, et RIEN n'est écrit dans localStorage, sessionStorage ni
+ *    IndexedDB.
+ *  - Seul le jeton CSRF (dérivé HMAC côté serveur — pas un secret de session) est
+ *    gardé EN MÉMOIRE et rechargé via /auth/me au démarrage d'onglet.
+ *  - purge() efface profil et CSRF en mémoire et prévient les abonnés — déclenchée à
+ *    la déconnexion ET sur tout 401 (révocation, désactivation : rejet IMMÉDIAT).
+ *  - Le tenant est résolu par le SERVEUR au login (slug) ; le client n'envoie jamais
+ *    de tenant_id.
  */
 import { ApiClient, ApiError, type LoginResponse, type MeResponse } from './api.ts';
 import { isLocale, setLocale } from './i18n.ts';
-
-const TOKEN_TAB_KEY = 'kora.session';
 
 export type LoginStep =
   | { kind: 'ok' }
@@ -55,20 +54,14 @@ export class Session {
 
   // ---------- cycle de vie ----------
 
-  /** Reprise d'onglet : jeton du sessionStorage revalidé par /auth/me (jamais de confiance locale). */
+  /**
+   * Reprise d'onglet : si le cookie HttpOnly est encore valable, /auth/me répond et
+   * fournit le jeton CSRF à recharger en mémoire — aucune confiance locale.
+   */
   async resume(): Promise<boolean> {
-    let token: string | null = null;
     try {
-      token = globalThis.sessionStorage?.getItem(TOKEN_TAB_KEY) ?? null;
-    } catch {
-      token = null;
-    }
-    if (!token) return false;
-    this.api.setToken(token);
-    try {
-      this.profile = await this.api.call<MeResponse>('me', { expectAuthErrors: true });
-      if (isLocale(this.profile.locale)) setLocale(this.profile.locale);
-      this.emit();
+      const me = await this.api.call<MeResponse>('me', { expectAuthErrors: true });
+      this.adopt(me);
       return true;
     } catch {
       this.purge();
@@ -78,19 +71,15 @@ export class Session {
 
   async login(tenantSlug: string, email: string, password: string, mfaCode?: string): Promise<LoginStep> {
     try {
+      // Transport COOKIE : le serveur pose le cookie HttpOnly ; la réponse ne
+      // contient JAMAIS le jeton de session — uniquement le CSRF dérivé.
       const res = await this.api.call<LoginResponse>('login', {
-        body: { tenantSlug, email, password, ...(mfaCode ? { mfaCode } : {}) },
+        body: { tenantSlug, email, password, tokenTransport: 'cookie', ...(mfaCode ? { mfaCode } : {}) },
         expectAuthErrors: true,
       });
-      this.api.setToken(res.token);
-      try {
-        globalThis.sessionStorage?.setItem(TOKEN_TAB_KEY, res.token);
-      } catch {
-        /* mémoire seule : acceptable */
-      }
-      this.profile = await this.api.call<MeResponse>('me');
-      if (isLocale(this.profile.locale)) setLocale(this.profile.locale);
-      this.emit();
+      this.api.setCsrf(res.csrfToken);
+      const me = await this.api.call<MeResponse>('me');
+      this.adopt(me);
       return { kind: 'ok' };
     } catch (e) {
       if (!(e instanceof ApiError)) return { kind: 'unavailable' };
@@ -104,32 +93,35 @@ export class Session {
     }
   }
 
+  private adopt(me: MeResponse): void {
+    this.profile = me;
+    if (typeof me.csrfToken === 'string') this.api.setCsrf(me.csrfToken);
+    if (isLocale(me.locale)) setLocale(me.locale);
+    this.emit();
+  }
+
   async logout(): Promise<void> {
     try {
-      if (this.api.hasToken()) await this.api.call<void>('logout', { expectAuthErrors: true });
+      // Révoque la session côté serveur ET efface le cookie (Set-Cookie Max-Age=0).
+      if (this.profile) await this.api.call<void>('logout', { expectAuthErrors: true });
     } catch {
       /* la purge locale a lieu quoi qu'il arrive */
     }
     this.purge();
   }
 
-  /** Efface TOUT état local de session (déconnexion, 401, désactivation). */
+  /** Efface TOUT état local de session (mémoire uniquement — rien n'est stocké). */
   purge(): void {
     this.profile = null;
-    this.api.setToken(null);
-    try {
-      globalThis.sessionStorage?.removeItem(TOKEN_TAB_KEY);
-    } catch {
-      /* rien à faire */
-    }
+    this.api.setCsrf(null);
     this.emit();
   }
 
   /** Recharge le profil (après changement de rôle/langue côté serveur). */
   async refreshProfile(): Promise<void> {
-    if (!this.api.hasToken()) return;
-    this.profile = await this.api.call<MeResponse>('me');
-    this.emit();
+    if (!this.profile) return;
+    const me = await this.api.call<MeResponse>('me');
+    this.adopt(me);
   }
 
   /** Persiste la langue côté serveur (préférence utilisateur) + application immédiate. */

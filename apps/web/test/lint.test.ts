@@ -47,17 +47,19 @@ test('aucun rendu HTML non contrôlé (innerHTML & co interdits partout dans src
   }
 });
 
-test('stockages : localStorage limité au miroir de langue, sessionStorage au module de session', () => {
+test('stockages : AUCUN jeton côté client — localStorage limité au miroir de langue, sessionStorage/indexedDB interdits', () => {
   for (const f of files) {
     const code = stripComments(f.code);
     if (code.includes('localStorage')) {
       assert.equal(f.path, 'core/i18n.ts', `${f.path} touche localStorage (réservé au miroir de langue)`);
     }
-    if (code.includes('sessionStorage')) {
-      assert.equal(f.path, 'core/session.ts', `${f.path} touche sessionStorage (réservé au jeton d'onglet)`);
-    }
+    // Clôture Phase 1 : le jeton vit dans un cookie HttpOnly côté serveur — plus
+    // AUCUN module client n'a le droit de toucher sessionStorage.
+    assert.ok(!code.includes('sessionStorage'), `${f.path} touche sessionStorage (interdit — cookie HttpOnly)`);
     assert.ok(!code.includes('indexedDB'), `${f.path} touche indexedDB (interdit)`);
-    assert.ok(!/document\.cookie/.test(code), `${f.path} touche document.cookie (interdit)`);
+    assert.ok(!/document\.cookie/.test(code), `${f.path} touche document.cookie (interdit — le cookie de session est HttpOnly, le CSRF vient de l'API)`);
+    assert.ok(!code.includes('kora.session'), `${f.path} référence l'ancien stockage de jeton`);
+    assert.ok(!/authorization.*Bearer|Bearer \$\{/i.test(code), `${f.path} manipule un jeton Bearer côté navigateur`);
   }
 });
 

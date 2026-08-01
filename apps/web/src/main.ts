@@ -1,8 +1,9 @@
 /**
- * KORA PWA — point d'entrée (E7).
- * Assemble : session (jeton mémoire+onglet, purge sur 401), routeur à permissions
- * d'AFFICHAGE (le serveur reste seul juge), coquille, pages, service worker (shell
- * seulement — jamais de donnée RH en cache), bandeaux hors-ligne / nouvelle version.
+ * KORA PWA — point d'entrée (E7, durci en clôture Phase 1).
+ * Assemble : session par cookie HttpOnly (AUCUN jeton côté client, CSRF en mémoire,
+ * purge sur 401), routeur à permissions d'AFFICHAGE (le serveur reste seul juge),
+ * coquille, pages, service worker (shell seulement — jamais de donnée RH en cache),
+ * bandeaux hors-ligne / nouvelle version.
  */
 import { ApiClient, ApiError } from './core/api.ts';
 import { Session } from './core/session.ts';
