@@ -23,6 +23,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   async withTenant<T>(
     tenantId: string,
     fn: (tx: Prisma.TransactionClient) => Promise<T>,
+    opts?: { timeoutMs?: number },
   ): Promise<T> {
     if (!UUID_RE.test(tenantId)) {
       throw new Error('withTenant : identifiant de tenant invalide');
@@ -32,7 +33,9 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       // peut rejeter un SELECT selon les versions de Prisma.
       await tx.$queryRaw`SELECT set_config('app.tenant_id', ${tenantId}, true)`;
       return fn(tx);
-    });
+      // Le délai par défaut de Prisma (5 s) reste la règle ; seules les exécutions
+      // BORNÉES du moteur de présence (E10.2) demandent une fenêtre plus large.
+    }, opts?.timeoutMs !== undefined ? { timeout: opts.timeoutMs } : undefined);
   }
 
   /** Résolution du slug au login — seule lecture légitime avant tout contexte tenant (0007). */

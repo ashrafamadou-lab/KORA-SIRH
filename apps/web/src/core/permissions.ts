@@ -54,6 +54,10 @@ export const NAV_MAP: NavSection[] = [
       { route: '/time/unmatched', labelKey: 'nav.timeUnmatched', anyOf: ['time.punches_view_errors', 'time.punches_import', 'time.devices_manage'], icon: 'alert' },
       { route: '/time/devices', labelKey: 'nav.timeDevices', anyOf: ['time.devices_manage'], icon: 'device' },
       { route: '/time/mine', labelKey: 'nav.timeMine', anyOf: ['time.punches_view_own'], icon: 'stamp' },
+      { route: '/time/results', labelKey: 'nav.timeResults', anyOf: ['time.results_view'], icon: 'calendar' },
+      { route: '/time/anomalies', labelKey: 'nav.timeAnomalies', anyOf: ['time.anomalies_view', 'time.anomalies_manage'], icon: 'alert' },
+      { route: '/time/runs', labelKey: 'nav.timeRuns', anyOf: ['time.calc_view', 'time.calc_run', 'time.calc_recalc'], icon: 'layers' },
+      { route: '/time/presence', labelKey: 'nav.timeMyPresence', anyOf: ['time.results_view_own'], icon: 'stamp' },
     ],
   },
   {

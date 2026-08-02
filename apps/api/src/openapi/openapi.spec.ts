@@ -1185,6 +1185,125 @@ export const OPENAPI_SPEC = {
         responses: { '201': { description: '{ batchId, rawPunchId, matchStatus }' }, '409': err('Pointage identique déjà enregistré') },
       },
     },
+    // ---------------- Moteur de présence (E10.2) ----------------
+    '/time/calc/run': {
+      post: {
+        summary: 'Déclencher un CALCUL de présence (synchrone, borné, audité) — time.calc_run',
+        description:
+          'Transforme les événements normalisés en résultats journaliers VERSIONNÉS sans jamais modifier bruts, ' +
+          'horaires, affectations ni paramètres. Idempotent : contenu identique ⇒ aucune écriture. Deux exécutions ' +
+          'ACTIVES du même tenant ne peuvent pas se chevaucher en période (contrainte d’exclusion PostgreSQL) ⇒ 409. ' +
+          'Corps : { periodStart, periodEnd, scopeKind: tenant|company|site|unit|employee, scopeId?, reason }.',
+        security: bearer,
+        responses: { '201': { description: '{ run: statuts, compteurs, durée, version du moteur } — heures sup CANDIDATES, aucun montant' }, '409': err('Exécution active chevauchante'), '400': err('Période ou périmètre hors bornes') },
+      },
+    },
+    '/time/calc/recalc': {
+      post: {
+        summary: 'RECALCUL motivé : nouvelle version si écart, l’historique reste — time.calc_recalc, audité',
+        description: 'Jamais silencieux : reason obligatoire, l’ancienne version bascule hors « courante » mais demeure, chaque écart est explicable (historique + comparaison).',
+        security: bearer,
+        responses: { '201': { description: '{ run }' }, '409': err('Exécution active chevauchante') },
+      },
+    },
+    '/time/calc/preview': {
+      post: {
+        summary: 'PRÉVISUALISATION d’un recalcul : compare, n’écrit RIEN — time.calc_recalc',
+        security: bearer,
+        responses: { '200': { description: '{ evaluated, wouldWrite, unchanged, diffs: [{ employeeId, date, currentVersion, currentStatus, nextStatus, changedFields }] }' } },
+      },
+    },
+    '/time/calc/runs': {
+      get: {
+        summary: 'Exécutions de calcul (statuts, compteurs, durées) — time.calc_view',
+        security: bearer,
+        responses: { '200': { description: '{ items }' }, '403': err('Permission absente') },
+      },
+    },
+    '/time/calc/runs/{id}': {
+      get: {
+        summary: 'Détail d’une exécution — time.calc_view',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ run }' }, '404': err('Introuvable') },
+      },
+    },
+    '/time/results': {
+      get: {
+        summary: 'REGISTRE quotidien : résultats courants d’une date — time.results_view (portée réelle)',
+        description: 'Filtres status/siteId/unitId ; chaque ligne porte les minutes brutes ET retenues, le statut parmi les 15, le nombre d’anomalies ouvertes.',
+        security: bearer,
+        responses: { '200': { description: '{ items }' }, '403': err('Permission ou portée absente') },
+      },
+    },
+    '/time/results/mine': {
+      get: {
+        summary: 'MES présences (compte lié au salarié) — time.results_view_own',
+        security: bearer,
+        responses: { '200': { description: '{ linked, items }' }, '403': err('Permission absente') },
+      },
+    },
+    '/time/results/employee/{id}': {
+      get: {
+        summary: 'CALENDRIER d’un salarié sur une période — self via results_view_own, sinon portée + consultation AUDITÉE',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ items, self }' }, '404': err('Hors portée') },
+      },
+    },
+    '/time/results/day': {
+      get: {
+        summary: 'DÉTAIL d’une journée : résultat courant, anomalies, chronologie des pointages, nombre de versions',
+        description: 'Instantané complet : horaire appliqué (modèle, version, jour de cycle), paramètres E4 utilisés avec provenance, périodes reconstituées, événements retenus.',
+        security: bearer,
+        responses: { '200': { description: '{ result, anomalies, events, versionCount, self }' }, '404': err('Aucun résultat') },
+      },
+    },
+    '/time/results/history': {
+      get: {
+        summary: 'HISTORIQUE des versions d’une journée (motif d’exécution, moteur, anomalies)',
+        security: bearer,
+        responses: { '200': { description: '{ versions }' }, '404': err('Aucun résultat') },
+      },
+    },
+    '/time/results/compare': {
+      get: {
+        summary: 'COMPARAISON de deux versions d’une journée : champs changés côte à côte',
+        security: bearer,
+        responses: { '200': { description: '{ fields: [{ field, a, b }], a, b }' }, '404': err('Version absente') },
+      },
+    },
+    '/time/results/aggregates': {
+      get: {
+        summary: 'AGRÉGATS retraçables par salarié (présences, retards, nuits, HS candidates, anomalies ouvertes) — time.results_view',
+        description: 'Sommes directes des résultats journaliers COURANTS — retraçables ligne à ligne. Support de suivi : PAS un module de paie.',
+        security: bearer,
+        responses: { '200': { description: '{ perEmployee, totals }' }, '403': err('Permission ou portée absente') },
+      },
+    },
+    '/time/anomalies/catalog': {
+      get: {
+        summary: 'Catalogue FERMÉ des 18 anomalies : code stable, libellés FR/EN, sévérité par défaut',
+        security: bearer,
+        responses: { '200': { description: '{ items }' } },
+      },
+    },
+    '/time/anomalies': {
+      get: {
+        summary: 'FILE des anomalies (versions courantes) — time.anomalies_view (portée réelle)',
+        security: bearer,
+        responses: { '200': { description: '{ items }' }, '403': err('Permission ou portée absente') },
+      },
+    },
+    '/time/anomalies/{id}/state': {
+      post: {
+        summary: 'Changer l’ÉTAT d’une anomalie (open → acknowledged | dismissed…) — time.anomalies_manage, audité',
+        description: '« resolved » est RÉSERVÉ au circuit de correction E10.3 : demande explicite ⇒ 409. Machine à états portée par un TRIGGER PostgreSQL.',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: 'État changé' }, '409': err('Transition interdite ou resolved demandé') },
+      },
+    },
     '/openapi.json': {
       get: { summary: 'Cette spécification', responses: { '200': { description: 'OpenAPI 3.0.3' } } },
     },

@@ -62,6 +62,7 @@ let BASE = '';
 let API_PORT = 0;
 let tenantId = '';
 let mfaSecret = '';
+let hr = null;
 
 async function seedUser(email, perms) {
   const require2 = createRequire(join(repoRoot, 'apps', 'api', 'package.json'));
@@ -165,9 +166,12 @@ before(async (tc) => {
     'time.schedules_view', 'time.punches_import', 'time.punches_view', 'time.punches_view_errors', 'time.devices_manage']);
   await seedUser(viewerEmail, ['employees.view']);
   await seedUser(timeAdmEmail, ['employees.view', 'workflow.view', 'org.view',
-    'time.schedules_view', 'time.punches_import', 'time.punches_view', 'time.punches_view_errors', 'time.devices_manage']);
+    'time.schedules_view', 'time.punches_import', 'time.punches_view', 'time.punches_view_errors', 'time.devices_manage',
+    // E10.2 : déclenchement du moteur + consultation des résultats et anomalies.
+    'time.schedules_manage', 'time.schedules_assign', 'time.calc_run', 'time.calc_view',
+    'time.results_view', 'time.anomalies_view', 'time.anomalies_manage']);
   await seedUser(mfaEmail, ['employees.view']);
-  seedHr();
+  hr = seedHr();
 
   const require2 = createRequire(join(here, 'browser.e2e.test.mjs'));
   const mainModule = require2(API_DIST);
@@ -510,6 +514,107 @@ test('TEMPS (E10.1) : RBAC — sans permission, ni menu, ni écran, ni API (le s
       body: JSON.stringify({ source: 'csv', mode: 'preview', contentText: 'x' }),
     })).status);
     assert.equal(importDirect, 403, 'API import : 403 sans permission (et CSRF géré par le client)');
+  });
+  await ctx.close();
+});
+
+test('TEMPS (E10.2) : calcul RÉEL par l’API, registre + détail de journée, et HORS LIGNE aucun résultat ne survit', { skip: !RUNNABLE }, async () => {
+  // 1. Horaire + affectation + exécution du MOTEUR par la surface API (Bearer).
+  const apiBase = `http://127.0.0.1:${API_PORT}/api/v1`;
+  const loginRes = await fetch(`${apiBase}/auth/login`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ tenantSlug: slug, email: timeAdmEmail, password: P }),
+  });
+  const { token } = await loginRes.json();
+  const post = async (path, body) => {
+    const r = await fetch(`${apiBase}${path}`, {
+      method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    assert.ok(r.status === 200 || r.status === 201, `${path} → ${r.status} ${await r.text().catch(() => '')}`);
+    return r.json();
+  };
+  const model = await post('/time/schedules/models', { code: 'PW-JOUR', labelFr: 'Jour PW', labelEn: 'PW Day', kind: 'fixed' });
+  await post(`/time/schedules/models/${model.id}/versions`, {
+    effectiveFrom: '2026-01-05', cycleDays: 7,
+    days: [0, 1, 2, 3, 4].map((i) => ({ dayIndex: i, isRest: false, startMinute: 480, endMinute: 1020, breakStartMinute: 720, breakEndMinute: 780 }))
+      .concat([{ dayIndex: 5, isRest: true }, { dayIndex: 6, isRest: true }]),
+  });
+  await post('/time/schedules/assignments', {
+    employeeId: hr.e1, modelId: model.id, anchorDate: '2026-01-05', effectiveFrom: '2026-01-05',
+  });
+  const { run } = await post('/time/calc/run', {
+    periodStart: '2026-07-01', periodEnd: '2026-07-01', scopeKind: 'employee', scopeId: hr.e1,
+    reason: 'calcul du parcours navigateur',
+  });
+  assert.equal(run.status, 'completed');
+  assert.equal(run.resultsWritten, 1);
+
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await ctx.newPage();
+  await shot(page, 'temps-resultats', async () => {
+    await login(page, timeAdmEmail);
+    // 2. Registre de présence : la journée calculée du 2026-07-01 est là.
+    await page.click('a[href="#/time/results"]');
+    await page.waitForSelector('input[type="date"]');
+    await page.fill('input[type="date"]', '2026-07-01');
+    await page.click('form button[type="submit"]');
+    await page.waitForSelector('tbody tr');
+    let body = await page.evaluate(() => document.body.textContent ?? '');
+    assert.ok(body.includes('PW-0001'), 'le salarié calculé apparaît au registre');
+    assert.ok(body.includes('En retard') || body.includes('Late'), 'statut dérivé des faits (08:02 pour 08:00)');
+    // 3. Détail de la journée : chronologie + retenu vs BRUT + paramètres à la date.
+    await page.click(`a[href="#/time/results/${hr.e1}/2026-07-01"]`);
+    await page.waitForFunction(() => (document.body.textContent ?? '').includes('08:02'));
+    body = await page.evaluate(() => document.body.textContent ?? '');
+    assert.ok(body.includes('temps.tolerance.retard'), 'les paramètres appliqués À LA DATE sont montrés');
+    assert.ok(body.includes('kora-presence-'), 'la version du MOTEUR est affichée (reproductibilité)');
+    // 4. HORS LIGNE : la coquille tient, AUCUN résultat de présence ne reste lisible.
+    await ctx.setOffline(true);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#app');
+    const report = await storageReport(page);
+    assert.deepEqual(report.cacheApiEntries, [], 'AUCUNE réponse /api en Cache Storage');
+    assert.deepEqual(report.sessionStorageKeys, [], 'sessionStorage vide');
+    assert.ok(!report.bodyText.includes('PW-0001'), 'aucun matricule de résultat lisible hors ligne');
+    assert.ok(!report.bodyText.includes('En retard'), 'aucun statut de présence lisible hors ligne');
+    const apiOffline = await page.evaluate(async () => {
+      try {
+        const r = await fetch('/api/v1/time/results?date=2026-07-01');
+        return `status:${r.status}`;
+      } catch {
+        return 'network-error';
+      }
+    });
+    assert.equal(apiOffline, 'network-error', 'les résultats de présence ne répondent JAMAIS depuis un cache');
+    await ctx.setOffline(false);
+  });
+  await ctx.close();
+});
+
+test('TEMPS (E10.2) : RBAC — sans permission, ni registre, ni calcul (le serveur tranche)', { skip: !RUNNABLE }, async () => {
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await ctx.newPage();
+  await shot(page, 'temps-calc-rbac', async () => {
+    await login(page, viewerEmail); // employees.view SEUL
+    const hasLink = await page.evaluate(() => document.querySelector('a[href="#/time/results"]') !== null);
+    assert.equal(hasLink, false, 'menu Registre absent sans permission');
+    await page.goto(`${BASE}/#/time/results`);
+    await page.waitForFunction(() =>
+      (document.body.textContent ?? '').includes('Accès refusé')
+      || (document.body.textContent ?? '').includes('Access denied'));
+    const body = await page.evaluate(() => document.body.textContent ?? '');
+    assert.ok(!body.includes('PW-0001'), 'aucun résultat rendu');
+    // Le MASQUAGE n'est pas la sécurité : les appels directs sont refusés par le SERVEUR.
+    const direct = await page.evaluate(async () => (await fetch('/api/v1/time/results?date=2026-07-01')).status);
+    assert.equal(direct, 403, 'API résultats : 403 sans permission');
+    const runDirect = await page.evaluate(async () => (await fetch('/api/v1/time/calc/run', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ periodStart: '2026-07-01', periodEnd: '2026-07-01', scopeKind: 'tenant', reason: 'x' }),
+    })).status);
+    assert.equal(runDirect, 403, 'API calcul : 403 sans permission');
+    const anomDirect = await page.evaluate(async () => (await fetch('/api/v1/time/anomalies')).status);
+    assert.equal(anomDirect, 403, 'API anomalies : 403 sans permission');
   });
   await ctx.close();
 });

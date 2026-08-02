@@ -120,6 +120,22 @@ export const API_CONTRACT = {
   timeUnmatched: { method: 'get', path: '/time/punches/unmatched' },
   timeRenormalize: { method: 'post', path: '/time/punches/renormalize' },
   timeManualPunch: { method: 'post', path: '/time/punches/manual' },
+  // Moteur de présence (E10.2)
+  timeCalcRun: { method: 'post', path: '/time/calc/run' },
+  timeCalcRecalc: { method: 'post', path: '/time/calc/recalc' },
+  timeCalcPreview: { method: 'post', path: '/time/calc/preview' },
+  timeCalcRuns: { method: 'get', path: '/time/calc/runs' },
+  timeCalcRunDetail: { method: 'get', path: '/time/calc/runs/{id}' },
+  timeResults: { method: 'get', path: '/time/results' },
+  timeResultsMine: { method: 'get', path: '/time/results/mine' },
+  timeResultsEmployee: { method: 'get', path: '/time/results/employee/{id}' },
+  timeResultDay: { method: 'get', path: '/time/results/day' },
+  timeResultHistory: { method: 'get', path: '/time/results/history' },
+  timeResultCompare: { method: 'get', path: '/time/results/compare' },
+  timeAggregates: { method: 'get', path: '/time/results/aggregates' },
+  timeAnomalyCatalog: { method: 'get', path: '/time/anomalies/catalog' },
+  timeAnomalies: { method: 'get', path: '/time/anomalies' },
+  timeAnomalyState: { method: 'post', path: '/time/anomalies/{id}/state' },
 } as const;
 
 export type ContractKey = keyof typeof API_CONTRACT;
@@ -246,6 +262,76 @@ export interface TimeImportResult {
   effective?: Record<string, string>;
   wouldApply?: boolean;
 }
+// Moteur de présence (E10.2)
+export type TimeDayStatus =
+  | 'present' | 'late' | 'early_departure' | 'late_and_early_departure'
+  | 'absent' | 'partial_presence' | 'incomplete_punches'
+  | 'rest_day' | 'public_holiday' | 'worked_rest_day' | 'worked_public_holiday'
+  | 'not_scheduled' | 'not_employed' | 'suspended' | 'unresolved';
+export interface TimeDayResult {
+  id: string; employeeId: string; workDate: string; version: number;
+  dayStatus: TimeDayStatus; calcState: 'ok' | 'error'; calcNote: string | null;
+  tz: string; scheduleModelCode: string | null; scheduleModelVersion: number | null;
+  cycleDayIndex: number | null;
+  plannedStartMinute: number | null; plannedEndMinute: number | null;
+  plannedBreakStartMinute: number | null; plannedBreakEndMinute: number | null;
+  plannedRest: boolean; holiday: boolean; exceptionKind: string | null;
+  firstIn: string | null; lastOut: string | null;
+  workPeriods: Array<{ startMinute: number; endMinute: number }>;
+  presenceMinutes: number; workedMinutes: number; breakMinutes: number;
+  lateMinutesRaw: number; lateMinutes: number;
+  earlyDepartureMinutesRaw: number; earlyDepartureMinutes: number;
+  absenceMinutes: number; nightMinutes: number; restDayMinutes: number; holidayMinutes: number;
+  overtimeCandidateMinutes: number; engineVersion: string; openAnomalies: number;
+  matricule?: string; firstName?: string; lastName?: string; siteCode?: string | null; unitCode?: string | null;
+}
+export interface TimeAnomalyItem {
+  id: string; code: string; severity: 'info' | 'warning' | 'blocking';
+  detail: string | null; refs: Record<string, unknown>;
+  state: 'open' | 'acknowledged' | 'resolved' | 'dismissed';
+  stateNote: string | null; stateAt: string | null; createdAt: string;
+  workDate?: string; employeeId?: string; matricule?: string; firstName?: string; lastName?: string;
+  dayStatus?: string;
+}
+export interface TimeDayDetail {
+  result: TimeDayResult & {
+    paramsUsed: Record<string, { value: unknown; parameterId: string | null; effectiveFrom: string | null; source: 'parametre' | 'defaut' }>;
+    usedEventIds: string[]; calcRunId: string; computedAt: string;
+  };
+  anomalies: TimeAnomalyItem[];
+  events: Array<{ id: string; localDate: string; localTime: string; eventType: string; tz: string; occurredAt: string | null; siteCode: string | null; deviceCode: string | null }>;
+  versionCount: number; self: boolean;
+}
+export interface TimeCalcRun {
+  id: string; periodStart: string; periodEnd: string; scopeKind: string; reason: string;
+  isRecalc: boolean; engineVersion: string; status: string;
+  startedAt: string; finishedAt: string | null;
+  employeesCount: number; daysCount: number; resultsWritten: number; resultsUnchanged: number;
+  resultsError: number; anomaliesCount: number; durationMs: number | null; errorNote?: string | null;
+}
+export interface TimeCalcPreviewOut {
+  evaluated: number; wouldWrite: number; unchanged: number;
+  diffs: Array<{ employeeId: string; date: string; currentVersion: number | null;
+    currentStatus: string | null; nextStatus: string; changedFields: string[]; nextAnomalies: string[] }>;
+}
+export interface TimeHistoryVersion extends TimeDayResult {
+  isCurrent: boolean; computedAt: string; runReason: string; runIsRecalc: boolean;
+  runStartedAt: string; anomalyCount: number;
+}
+export interface TimeCompareOut {
+  fields: Array<{ field: string; a: unknown; b: unknown }>;
+  a: { version: number; runReason: string; runIsRecalc: boolean; computedAt: string };
+  b: { version: number; runReason: string; runIsRecalc: boolean; computedAt: string };
+}
+export interface TimeAggregateRow {
+  employeeId: string; matricule: string; firstName: string; lastName: string;
+  daysTotal: number; expectedDays: number; presentDays: number; absentDays: number;
+  unresolvedDays: number; lateCount: number; lateMinutes: number;
+  earlyCount: number; earlyDepartureMinutes: number; workedMinutes: number; nightMinutes: number;
+  restDayMinutes: number; holidayMinutes: number; overtimeCandidateMinutes: number; openAnomalies: number;
+}
+export interface TimeAnomalyCatalogItem { code: string; labelFr: string; labelEn: string; defaultSeverity: string }
+
 export interface TimeEmployeeSchedule {
   assigned: boolean;
   date?: string; modelCode?: string; modelLabelFr?: string; modelLabelEn?: string; modelKind?: string;

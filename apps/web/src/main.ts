@@ -26,6 +26,10 @@ import {
   timeImportPage, timeMinePage, timeModelDetailPage, timeModelsPage,
   timePunchesPage, timeUnmatchedPage,
 } from './pages/time.ts';
+import {
+  timeAnomaliesPage, timeDayDetailPage, timeEmployeeCalendarPage,
+  timeMyPresencePage, timeResultsPage, timeRunsPage,
+} from './pages/time-calc.ts';
 import { states, stateForError } from './ui/kit.ts';
 
 const appRoot = document.getElementById('app')!;
@@ -73,6 +77,13 @@ const routes: RouteDef[] = [
   { pattern: '/time/unmatched', render: () => timeUnmatchedPage(session), anyOf: ['time.punches_view_errors', 'time.punches_import', 'time.devices_manage'] },
   { pattern: '/time/devices', render: () => timeDevicesPage(session), anyOf: ['time.devices_manage'] },
   { pattern: '/time/mine', render: () => timeMinePage(session), anyOf: ['time.punches_view_own'] },
+  // Moteur de présence (E10.2) — résultats versionnés, anomalies, exécutions.
+  { pattern: '/time/results', render: () => timeResultsPage(session), anyOf: ['time.results_view'] },
+  { pattern: '/time/results/:id/:date', render: (m) => timeDayDetailPage(session, m.params['id']!, m.params['date']!), anyOf: ['time.results_view', 'time.results_view_own'] },
+  { pattern: '/time/calendar/:id', render: (m) => timeEmployeeCalendarPage(session, m.params['id']!), anyOf: ['time.results_view', 'time.results_view_own'] },
+  { pattern: '/time/anomalies', render: () => timeAnomaliesPage(session), anyOf: ['time.anomalies_view', 'time.anomalies_manage'] },
+  { pattern: '/time/runs', render: () => timeRunsPage(session), anyOf: ['time.calc_view', 'time.calc_run', 'time.calc_recalc'] },
+  { pattern: '/time/presence', render: () => timeMyPresencePage(session), anyOf: ['time.results_view_own'] },
 ];
 
 const CRUMB_BY_PREFIX: Array<[string, () => ReturnType<typeof crumbsOf>]> = [
@@ -91,6 +102,11 @@ const CRUMB_BY_PREFIX: Array<[string, () => ReturnType<typeof crumbsOf>]> = [
   ['/time/unmatched', () => crumbsOf(['nav.dashboard', '/'], ['nav.time', '/time/schedules'], ['nav.timeUnmatched', null])],
   ['/time/devices', () => crumbsOf(['nav.dashboard', '/'], ['nav.time', '/time/schedules'], ['nav.timeDevices', null])],
   ['/time/mine', () => crumbsOf(['nav.dashboard', '/'], ['nav.time', '/time/schedules'], ['nav.timeMine', null])],
+  ['/time/results', () => crumbsOf(['nav.dashboard', '/'], ['nav.time', '/time/schedules'], ['nav.timeResults', null])],
+  ['/time/calendar', () => crumbsOf(['nav.dashboard', '/'], ['nav.time', '/time/schedules'], ['nav.timeResults', null])],
+  ['/time/anomalies', () => crumbsOf(['nav.dashboard', '/'], ['nav.time', '/time/schedules'], ['nav.timeAnomalies', null])],
+  ['/time/runs', () => crumbsOf(['nav.dashboard', '/'], ['nav.time', '/time/schedules'], ['nav.timeRuns', null])],
+  ['/time/presence', () => crumbsOf(['nav.dashboard', '/'], ['nav.time', '/time/schedules'], ['nav.timeMyPresence', null])],
   ['/admin', () => crumbsOf(['nav.dashboard', '/'], ['nav.adminUsers', null])],
   ['/config', () => crumbsOf(['nav.dashboard', '/'], ['nav.config', null])],
   ['/audit', () => crumbsOf(['nav.dashboard', '/'], ['nav.audit', null])],

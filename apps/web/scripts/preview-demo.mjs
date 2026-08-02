@@ -62,7 +62,9 @@ const routesDemo = {
       'employees.view_history', 'workflow.view', 'workflow.act', 'org.view', 'users.view', 'users.create',
       'users.manage_roles', 'sessions.revoke', 'audit.view', 'audit.export', 'parameters.view',
       'time.schedules_view', 'time.schedules_manage', 'time.schedules_assign', 'time.punches_import',
-      'time.punches_view', 'time.punches_view_errors', 'time.punches_view_own', 'time.devices_manage'],
+      'time.punches_view', 'time.punches_view_errors', 'time.punches_view_own', 'time.devices_manage',
+      'time.results_view', 'time.results_view_own', 'time.anomalies_view', 'time.anomalies_manage',
+      'time.calc_run', 'time.calc_recalc', 'time.calc_view'],
     scopes: [{ type: 'tenant', ref: null }], roles: [{ key: 'rh-admin', name: 'Administrateur RH' }],
     locale: 'fr', mfaEnabled: true, tenant: T,
   }),
@@ -202,7 +204,106 @@ const routesDemo = {
     exception: null,
     holidays: [{ labelFr: 'Fête nationale', labelEn: 'National day', calendarCode: 'FERIES-BJ' }],
   }),
+  // ---------- Moteur de présence (E10.2) — données de DÉMONSTRATION ----------
+  'GET /time/results': (q) => ({ items: [
+    demoDay(uid(100), 'SBT-0001', 'Awa', 'Sossou', q.get('date') ?? '2026-07-31', 'present', { workedMinutes: 485, presenceMinutes: 485, nightMinutes: 480, firstIn: '2026-07-31T20:55:00.000Z', lastOut: '2026-08-01T05:00:00.000Z', overtimeCandidateMinutes: 5, workPeriods: [{ startMinute: 1315, endMinute: 1800 }] }),
+    demoDay(uid(101), 'SBT-0002', 'Bio', 'Kassim', q.get('date') ?? '2026-07-31', 'late', { workedMinutes: 460, presenceMinutes: 460, lateMinutesRaw: 30, lateMinutes: 30, absenceMinutes: 30, openAnomalies: 0 }),
+    demoDay(uid(102), 'SBT-0003', 'Chantal', 'Dossou', q.get('date') ?? '2026-07-31', 'incomplete_punches', { openAnomalies: 1, firstIn: '2026-07-31T07:02:00.000Z' }),
+    demoDay(uid(105), 'SBT-0006', 'Faustin', 'Zinsou', q.get('date') ?? '2026-07-31', 'suspended', { openAnomalies: 1 }),
+  ] }),
+  'GET /time/results/mine': (q) => ({ linked: true, items: [
+    demoDay(uid(100), 'SBT-0001', 'Awa', 'Sossou', q.get('to') ?? '2026-07-31', 'present', { workedMinutes: 485, nightMinutes: 480 }),
+    demoDay(uid(100), 'SBT-0001', 'Awa', 'Sossou', '2026-07-30', 'late', { workedMinutes: 450, lateMinutesRaw: 12, lateMinutes: 12 }),
+    demoDay(uid(100), 'SBT-0001', 'Awa', 'Sossou', '2026-07-29', 'rest_day', {}),
+  ] }),
+  [`GET /time/results/employee/${uid(100)}`]: () => ({ self: false, items: [
+    demoDay(uid(100), 'SBT-0001', 'Awa', 'Sossou', '2026-07-29', 'rest_day', {}),
+    demoDay(uid(100), 'SBT-0001', 'Awa', 'Sossou', '2026-07-30', 'late', { workedMinutes: 450, lateMinutesRaw: 12, lateMinutes: 12 }),
+    demoDay(uid(100), 'SBT-0001', 'Awa', 'Sossou', '2026-07-31', 'present', { workedMinutes: 485, nightMinutes: 480, overtimeCandidateMinutes: 5 }),
+  ] }),
+  'GET /time/results/day': (q) => ({
+    versionCount: 2, self: false,
+    result: {
+      ...demoDay(uid(100), 'SBT-0001', 'Awa', 'Sossou', q.get('date') ?? '2026-07-31', 'present', {
+        workedMinutes: 485, presenceMinutes: 485, nightMinutes: 480, overtimeCandidateMinutes: 5,
+        firstIn: '2026-07-31T20:55:00.000Z', lastOut: '2026-08-01T05:00:00.000Z',
+        workPeriods: [{ startMinute: 1315, endMinute: 1800 }],
+      }),
+      usedEventIds: [uid(680), uid(681)], calcRunId: uid(700), computedAt: '2026-08-01T06:30:00Z',
+      paramsUsed: {
+        'temps.tolerance.retard': { value: 10, parameterId: uid(710), effectiveFrom: '2025-01-01', source: 'parametre' },
+        'temps.nuit.debut': { value: 1320, parameterId: null, effectiveFrom: null, source: 'defaut' },
+        'temps.nuit.fin': { value: 360, parameterId: null, effectiveFrom: null, source: 'defaut' },
+        'temps.arrondi.minutes': { value: 1, parameterId: null, effectiveFrom: null, source: 'defaut' },
+      },
+    },
+    anomalies: [
+      { id: uid(720), code: 'punch_other_site', severity: 'info', detail: null, refs: { eventId: uid(680) }, state: 'open', stateNote: null, stateAt: null, createdAt: '2026-08-01T06:30:00Z' },
+    ],
+    events: [
+      { id: uid(680), localDate: '2026-07-31', localTime: '21:55:00', eventType: 'in', tz: 'Africa/Porto-Novo', occurredAt: '2026-07-31T20:55:00Z', siteCode: 'COT-SIEGE', deviceCode: 'PTR-HALL' },
+      { id: uid(681), localDate: '2026-08-01', localTime: '06:00:00', eventType: 'out', tz: 'Africa/Porto-Novo', occurredAt: '2026-08-01T05:00:00Z', siteCode: 'COT-SIEGE', deviceCode: 'PTR-HALL' },
+    ],
+  }),
+  'GET /time/results/history': (q) => ({ versions: [
+    { ...demoDay(uid(100), 'SBT-0001', 'Awa', 'Sossou', q.get('date') ?? '2026-07-31', 'absent', { absenceMinutes: 480, version: 1 }), isCurrent: false, computedAt: '2026-08-01T06:00:00Z', runReason: 'calcul initial', runIsRecalc: false, runStartedAt: '2026-08-01T06:00:00Z', anomalyCount: 0, paramsUsed: {} },
+    { ...demoDay(uid(100), 'SBT-0001', 'Awa', 'Sossou', q.get('date') ?? '2026-07-31', 'present', { workedMinutes: 485, nightMinutes: 480, version: 2 }), isCurrent: true, computedAt: '2026-08-01T06:30:00Z', runReason: 'pointages reçus après coup', runIsRecalc: true, runStartedAt: '2026-08-01T06:30:00Z', anomalyCount: 1, paramsUsed: {} },
+  ] }),
+  'GET /time/results/compare': () => ({
+    fields: [
+      { field: 'dayStatus', a: 'absent', b: 'present' },
+      { field: 'workedMinutes', a: 0, b: 485 },
+      { field: 'absenceMinutes', a: 480, b: 0 },
+      { field: 'nightMinutes', a: 0, b: 480 },
+    ],
+    a: { version: 1, runReason: 'calcul initial', runIsRecalc: false, computedAt: '2026-08-01T06:00:00Z' },
+    b: { version: 2, runReason: 'pointages reçus après coup', runIsRecalc: true, computedAt: '2026-08-01T06:30:00Z' },
+  }),
+  'GET /time/results/aggregates': () => ({
+    perEmployee: [
+      { employeeId: uid(100), matricule: 'SBT-0001', firstName: 'Awa', lastName: 'Sossou', daysTotal: 31, expectedDays: 22, presentDays: 21, absentDays: 1, unresolvedDays: 0, lateCount: 2, lateMinutes: 42, earlyCount: 0, earlyDepartureMinutes: 0, workedMinutes: 10_120, nightMinutes: 9_600, restDayMinutes: 0, holidayMinutes: 480, overtimeCandidateMinutes: 160, openAnomalies: 1 },
+    ],
+    totals: { daysTotal: 31, expectedDays: 22, presentDays: 21, absentDays: 1, lateCount: 2, workedMinutes: 10_120 },
+  }),
+  'GET /time/anomalies/catalog': () => ({ items: [
+    { code: 'missing_out', labelFr: 'Entrée sans sortie — aucune heure inventée', labelEn: 'In punch without out — no time invented', defaultSeverity: 'warning' },
+    { code: 'punch_other_site', labelFr: 'Pointage sur un autre site que l’affectation', labelEn: 'Punch on a different site than assignment', defaultSeverity: 'info' },
+    { code: 'suspended', labelFr: 'Salarié suspendu à cette date', labelEn: 'Employee suspended at this date', defaultSeverity: 'blocking' },
+  ] }),
+  'GET /time/anomalies': () => ({ items: [
+    { id: uid(730), code: 'missing_out', severity: 'warning', detail: 'entrée sans sortie — la période n’est PAS comptée', refs: {}, state: 'open', stateNote: null, stateAt: null, createdAt: '2026-08-01T06:30:00Z', workDate: '2026-07-31', employeeId: uid(102), matricule: 'SBT-0003', firstName: 'Chantal', lastName: 'Dossou', dayStatus: 'incomplete_punches' },
+    { id: uid(731), code: 'suspended', severity: 'blocking', detail: 'pointages présents alors que le salarié n’est pas en activité', refs: {}, state: 'open', stateNote: null, stateAt: null, createdAt: '2026-08-01T06:30:00Z', workDate: '2026-07-31', employeeId: uid(105), matricule: 'SBT-0006', firstName: 'Faustin', lastName: 'Zinsou', dayStatus: 'suspended' },
+    { id: uid(732), code: 'punch_other_site', severity: 'info', detail: null, refs: {}, state: 'acknowledged', stateNote: 'vu', stateAt: '2026-08-01T08:00:00Z', createdAt: '2026-08-01T06:30:00Z', workDate: '2026-07-31', employeeId: uid(100), matricule: 'SBT-0001', firstName: 'Awa', lastName: 'Sossou', dayStatus: 'present' },
+  ] }),
+  'GET /time/calc/runs': () => ({ items: [
+    { id: uid(700), periodStart: '2026-07-01', periodEnd: '2026-07-31', scopeKind: 'tenant', reason: 'calcul mensuel de juillet', isRecalc: false, engineVersion: 'kora-presence-1.0.0', status: 'completed', startedAt: '2026-08-01T06:00:00Z', finishedAt: '2026-08-01T06:00:04Z', employeesCount: 27, daysCount: 31, resultsWritten: 792, resultsUnchanged: 45, resultsError: 0, anomaliesCount: 23, durationMs: 4210 },
+    { id: uid(701), periodStart: '2026-07-31', periodEnd: '2026-07-31', scopeKind: 'employee', reason: 'pointages reçus après coup', isRecalc: true, engineVersion: 'kora-presence-1.0.0', status: 'completed', startedAt: '2026-08-01T06:30:00Z', finishedAt: '2026-08-01T06:30:01Z', employeesCount: 1, daysCount: 1, resultsWritten: 1, resultsUnchanged: 0, resultsError: 0, anomaliesCount: 1, durationMs: 320 },
+    { id: uid(702), periodStart: '2026-06-01', periodEnd: '2026-06-30', scopeKind: 'tenant', reason: 'course concurrente (démonstration)', isRecalc: false, engineVersion: 'kora-presence-1.0.0', status: 'failed', startedAt: '2026-07-01T06:00:00Z', finishedAt: '2026-07-01T06:00:00Z', employeesCount: 0, daysCount: 30, resultsWritten: 0, resultsUnchanged: 0, resultsError: 0, anomaliesCount: 0, durationMs: null, errorNote: 'exécution active chevauchante' },
+  ] }),
+  'POST /time/calc/preview': () => ({
+    evaluated: 31, wouldWrite: 1, unchanged: 30,
+    diffs: [{ employeeId: uid(100), date: '2026-07-31', currentVersion: 1, currentStatus: 'absent', nextStatus: 'present', changedFields: ['day_status', 'worked_minutes', 'night_minutes'], nextAnomalies: [] }],
+  }),
+  'POST /time/calc/run': () => ({ run: { id: uid(700), periodStart: '2026-07-01', periodEnd: '2026-07-31', scopeKind: 'tenant', reason: 'démo', isRecalc: false, engineVersion: 'kora-presence-1.0.0', status: 'completed', startedAt: '2026-08-01T06:00:00Z', finishedAt: '2026-08-01T06:00:04Z', employeesCount: 27, daysCount: 31, resultsWritten: 792, resultsUnchanged: 45, resultsError: 0, anomaliesCount: 23, durationMs: 4210 } }),
+  'POST /time/calc/recalc': () => ({ run: { id: uid(701), periodStart: '2026-07-31', periodEnd: '2026-07-31', scopeKind: 'employee', reason: 'démo', isRecalc: true, engineVersion: 'kora-presence-1.0.0', status: 'completed', startedAt: '2026-08-01T06:30:00Z', finishedAt: '2026-08-01T06:30:01Z', employeesCount: 1, daysCount: 1, resultsWritten: 1, resultsUnchanged: 0, resultsError: 0, anomaliesCount: 1, durationMs: 320 } }),
 };
+
+/** Résultat journalier de DÉMONSTRATION — valeurs par défaut sûres, surchargées au besoin. */
+function demoDay(employeeId, matricule, firstName, lastName, workDate, dayStatus, extra) {
+  return {
+    id: uid(800), employeeId, workDate, version: 1, dayStatus, calcState: 'ok', calcNote: null,
+    tz: 'Africa/Porto-Novo', scheduleModelCode: 'ROT-NUIT-4', scheduleModelVersion: 1, cycleDayIndex: 0,
+    plannedStartMinute: 1320, plannedEndMinute: 1800, plannedBreakStartMinute: null, plannedBreakEndMinute: null,
+    plannedRest: dayStatus === 'rest_day', holiday: false, exceptionKind: null,
+    firstIn: null, lastOut: null, workPeriods: [],
+    presenceMinutes: 0, workedMinutes: 0, breakMinutes: 0, lateMinutesRaw: 0, lateMinutes: 0,
+    earlyDepartureMinutesRaw: 0, earlyDepartureMinutes: 0, absenceMinutes: 0, nightMinutes: 0,
+    restDayMinutes: 0, holidayMinutes: 0, overtimeCandidateMinutes: 0,
+    engineVersion: 'kora-presence-1.0.0', openAnomalies: 0,
+    matricule, firstName, lastName, siteCode: 'COT-SIEGE', unitCode: 'PROD',
+    ...extra,
+  };
+}
 
 function employeeSubroutes(pathname, q) {
   const m = /^\/employees\/([^/]+)(?:\/([a-z]+))?$/.exec(pathname);
