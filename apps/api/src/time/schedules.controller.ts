@@ -202,7 +202,9 @@ export class SchedulesController {
   ) {
     const a = req.authCtx!;
     const date = single(q['date'], 'date') ?? new Date().toISOString().slice(0, 10);
-    return unwrap(await this.schedules.employeeScheduleAt(a.tenantId, a.userId, uuid(id, 'id'), date));
+    // Réponse À PLAT (l'horaire EST la ressource) — contrat consommé tel quel par la PWA.
+    const out = unwrap(await this.schedules.employeeScheduleAt(a.tenantId, a.userId, uuid(id, 'id'), date));
+    return out.schedule;
   }
 
   // ---------------- Fériés ----------------

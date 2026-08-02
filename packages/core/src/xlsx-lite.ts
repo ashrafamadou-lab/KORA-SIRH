@@ -139,14 +139,16 @@ const MAX_COLS = 64;
 function parseSheet(xml: string, shared: string[]): XlsxCell[][] | { error: string } {
   const rows: XlsxCell[][] = [];
   const rowRe = /<row(?:\s[^>]*)?>([\s\S]*?)<\/row>/g;
-  const cellRe = /<c\s([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g;
+  // Attributs OPTIONNELS : une cellule sans attribut s'écrit « <c><v>…</v></c> » —
+  // l'exiger décalait les colonnes (CI run 30753141804, colonne de série sautée).
+  const cellRe = /<c(\s[^>]*?)?(?:\/>|>([\s\S]*?)<\/c>)/g;
   let rm: RegExpExecArray | null;
   while ((rm = rowRe.exec(xml)) !== null) {
     if (rows.length >= MAX_ROWS) return { error: `fichier trop long (max ${MAX_ROWS} lignes)` };
     const cells: XlsxCell[] = [];
     let cm: RegExpExecArray | null;
     while ((cm = cellRe.exec(rm[1]!)) !== null) {
-      const attrs = cm[1]!;
+      const attrs = cm[1] ?? '';
       const inner = cm[2] ?? '';
       const refMatch = /r="([A-Z]+)\d+"/.exec(attrs);
       const idx = refMatch ? columnIndex(refMatch[1]!) : cells.length;

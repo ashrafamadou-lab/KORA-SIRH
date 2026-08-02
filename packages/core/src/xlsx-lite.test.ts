@@ -162,6 +162,22 @@ test('erreurs franches : signature absente, feuille vide, échappements XML', ()
   assert.equal(esc.rows[0]![1]!.text, 'été');
 });
 
+test('cellules SANS attribut (« <c><v>…</v></c> ») : lues, colonnes ALIGNÉES — jamais sautées', () => {
+  // Régression CI run 30753141804 : la cellule numérique sans attribut était sautée,
+  // décalant toutes les colonnes suivantes de la ligne.
+  const sheet = sheetXml(
+    `<row><c t="str"><v>Matricule</v></c><c t="str"><v>DateHeure</v></c><c t="str"><v>Sens</v></c></row>` +
+    `<row><c t="str"><v>B-7</v></c><c><v>46204.5</v></c><c t="str"><v>E</v></c></row>`,
+  );
+  const r = readXlsx(workbook(sheet));
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.equal(r.rows[0]!.length, 3, 'les TROIS cellules sont lues');
+  assert.equal(r.rows[0]![0]!.text, 'B-7');
+  assert.equal(r.rows[0]![1]!.num, 46204.5, 'la série numérique est à SA colonne');
+  assert.equal(r.rows[0]![2]!.text, 'E', 'le type d’événement n’a pas glissé');
+});
+
 test('columnIndex : A=0, Z=25, AA=26, BC12=54', () => {
   assert.equal(columnIndex('A1'), 0);
   assert.equal(columnIndex('Z9'), 25);
