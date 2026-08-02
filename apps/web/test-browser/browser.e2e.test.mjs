@@ -531,8 +531,10 @@ test('TEMPS (E10.2) : calcul RÉEL par l’API, registre + détail de journée, 
       method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
-    assert.ok(r.status === 200 || r.status === 201, `${path} → ${r.status} ${await r.text().catch(() => '')}`);
-    return r.json();
+    // Le corps n'est lisible qu'UNE fois : texte, assert, puis parse (CI 30757393308).
+    const text = await r.text();
+    assert.ok(r.status === 200 || r.status === 201, `${path} → ${r.status} ${text}`);
+    return JSON.parse(text);
   };
   const model = await post('/time/schedules/models', { code: 'PW-JOUR', labelFr: 'Jour PW', labelEn: 'PW Day', kind: 'fixed' });
   await post(`/time/schedules/models/${model.id}/versions`, {

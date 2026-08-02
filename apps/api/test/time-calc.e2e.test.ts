@@ -259,15 +259,17 @@ test('01 fixtures : organisation, salariés, horaires jour/nuit, férié, modèl
     calendarId: cal, date: FRI, labelFr: 'Fête test', labelEn: 'Test holiday',
   })).status, 201);
   // Modèle E5 pour les anomalies BLOQUANTES (créé puis ACTIVÉ — sinon rien ne part).
+  // Variables en minuscules : le validateur E5 impose ^[a-z0-9_.]+$ (CI run 30757393308).
   const tpl = await api('/admin/notify/templates', adm, {
     key: 'temps_anomalies_bloquantes', name: 'Anomalies bloquantes de présence',
     subjectFr: 'Présence : {{bloquantes}} anomalie(s) bloquante(s)', subjectEn: 'Attendance: {{bloquantes}} blocking anomaly(ies)',
-    bodyFr: 'Exécution {{executionId}} ({{periode}}) : {{bloquantes}} anomalie(s) bloquante(s) à traiter.',
-    bodyEn: 'Run {{executionId}} ({{periode}}): {{bloquantes}} blocking anomaly(ies) to handle.',
-    variables: ['executionId', 'bloquantes', 'periode'], channels: ['in_app'], mandatory: false,
+    bodyFr: 'Exécution {{execution_id}} ({{periode}}) : {{bloquantes}} anomalie(s) bloquante(s) à traiter.',
+    bodyEn: 'Run {{execution_id}} ({{periode}}): {{bloquantes}} blocking anomaly(ies) to handle.',
+    variables: ['execution_id', 'bloquantes', 'periode'], channels: ['in_app'], mandatory: false,
   });
-  assert.equal(tpl.status, 201, await tpl.text().catch(() => ''));
-  const tplId = ((await tpl.json()) as { id: string }).id;
+  const tplText = await tpl.text();
+  assert.equal(tpl.status, 201, tplText);
+  const tplId = (JSON.parse(tplText) as { id: string }).id;
   assert.equal((await api(`/admin/notify/templates/${tplId}/activate`, adm)).status, 200);
 });
 
@@ -325,8 +327,10 @@ test('03 exécution initiale : compteurs exacts, durée mesurée, notification E
   const res = await api('/time/calc/run', adm, {
     periodStart: MON, periodEnd: SUN, scopeKind: 'tenant', reason: 'calcul initial de la semaine',
   });
-  assert.equal(res.status, 201, await res.text().catch(() => ''));
-  const { run } = (await res.json()) as RunOut;
+  // Le corps n'est lisible qu'UNE fois : texte d'abord, assert, puis parse (CI 30757393308).
+  const resText = await res.text();
+  assert.equal(res.status, 201, resText);
+  const { run } = JSON.parse(resText) as RunOut;
   run1Id = run.id;
   assert.equal(run.status, 'completed');
   assert.equal(run.employeesCount, 6);
@@ -757,8 +761,9 @@ test('20 volume documenté : 26 salariés × 31 jours, durée mesurée et bornes
     periodStart: '2026-07-01', periodEnd: '2026-07-31', scopeKind: 'tenant', reason: 'volume : mois complet, tout le tenant',
   });
   const httpMs = Date.now() - t0;
-  assert.equal(res.status, 201, await res.text().catch(() => ''));
-  const { run } = (await res.json()) as RunOut;
+  const volText = await res.text();
+  assert.equal(res.status, 201, volText);
+  const { run } = JSON.parse(volText) as RunOut;
   assert.ok(run.status === 'completed' || run.status === 'completed_with_errors');
   assert.equal(run.employeesCount, 27, '7 salariés du scénario + 20 de volume');
   assert.equal(run.daysCount, 31);
@@ -773,21 +778,37 @@ test('20 volume documenté : 26 salariés × 31 jours, durée mesurée et bornes
   })).status, 400);
 });
 
-test('21 concurrence : deux exécutions actives chevauchantes — UNE seule gagne (409 PostgreSQL)', async () => {
+test('21 concurrence : deux exécutions chevauchantes ne peuvent JAMAIS écrire deux fois (verrou PostgreSQL)', async () => {
+  // La contrainte d'exclusion fait ATTENDRE la seconde exécution sur la première :
+  // - si la première est encore ACTIVE à son commit ⇒ 23P01 ⇒ 409 expliqué ;
+  // - en v1 synchrone (une transaction = tout le calcul), l'état commité est déjà
+  //   'completed' ⇒ la seconde repart de l'état COMMITTÉ, SÉRIALISÉE, et constate
+  //   l'identité : ZÉRO écriture. Dans les deux cas la garantie du sponsor tient :
+  //   jamais deux versions courantes incompatibles, jamais de double écriture
+  //   (CI run 30757393308 : 201+201 sérialisés — le second n'a rien écrit).
   const adm = await token(slugA, admEmail);
   const fire = () => api('/time/calc/run', adm, {
     periodStart: '2026-06-01', periodEnd: '2026-06-30', scopeKind: 'tenant', reason: 'course concurrente',
   });
   const [r1, r2] = await Promise.all([fire(), fire()]);
-  const statuses = [r1.status, r2.status].sort();
-  assert.deepEqual(statuses, [201, 409], `attendu une victoire nette, obtenu ${statuses.join(',')}`);
-  const winner = r1.status === 201 ? r1 : r2;
-  const { run } = (await winner.json()) as RunOut;
-  assert.ok(run.status.startsWith('completed'));
-  const loser = r1.status === 409 ? r1 : r2;
-  const msg = await loser.text();
-  assert.ok(msg.includes('chevauche'), 'le refus EXPLIQUE le chevauchement');
-  // Une seule version COURANTE par (salarié, jour) — garantie par l'index partiel.
+  const statuses = [r1.status, r2.status].sort((a, b) => a - b);
+  assert.equal(statuses[0], 201, 'au moins une exécution aboutit');
+  assert.ok(statuses[1] === 201 || statuses[1] === 409,
+    `seconde exécution : 201 (sérialisée après attente du verrou) ou 409 (active persistante) — obtenu ${statuses[1]}`);
+  const runs: RunOut['run'][] = [];
+  for (const r of [r1, r2]) {
+    if (r.status === 201) runs.push((JSON.parse(await r.text()) as RunOut).run);
+    else assert.ok((await r.text()).includes('chevauche'), 'le refus EXPLIQUE le chevauchement');
+  }
+  assert.ok(runs.every((x) => x.status.startsWith('completed')));
+  const expected = 27 * 30; // salariés × jours de juin — jamais calculés avant ce test
+  const writtenSum = runs.reduce((s, x) => s + x.resultsWritten, 0);
+  assert.equal(writtenSum, expected, 'les écritures ne se CUMULENT pas : une seule exécution écrit');
+  if (runs.length === 2) {
+    assert.ok(runs.some((x) => x.resultsWritten === 0 && x.resultsUnchanged === expected),
+      'l\'exécution sérialisée repart de l\'état commité et constate l\'identité (zéro écriture)');
+  }
+  // LA garantie centrale, par la base : une seule version COURANTE par (salarié, jour).
   const dupCurrent = psql(`SELECT count(*) FROM (
       SELECT employee_id, work_date FROM time.day_results
        WHERE tenant_id = '${tenantAId}' AND is_current

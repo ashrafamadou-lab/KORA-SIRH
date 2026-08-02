@@ -242,10 +242,12 @@ export class CalcController {
     }));
   }
 
-  /** Prise en charge / écartement — « resolved » = circuit de correction E10.3 (409). */
+  /** Prise en charge / écartement — « resolved » = circuit de correction E10.3 (409).
+   * PAS de garde déclarative ici : elle exigerait la portée TENANT (v1) et exclurait
+   * les responsables à portée fine — le SERVICE exige time.anomalies_manage ET borne
+   * l'action à la portée réelle (CI run 30757393308 : chef d'unité 403 au lieu de 404). */
   @Post('anomalies/:id/state')
   @HttpCode(200)
-  @RequirePermission('time.anomalies_manage')
   async setState(@Param('id') id: string, @Body() b: Record<string, unknown>, @Req() req: AuthenticatedRequest) {
     const a = req.authCtx!;
     const note = b?.['note'];

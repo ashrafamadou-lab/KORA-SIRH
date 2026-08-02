@@ -207,14 +207,14 @@ export class CalcService {
         if (blockingTotal > 0) {
           await this.notifyPermissionHolders(tx, tenantId, actor, 'time.anomalies_manage',
             `temps-anomalies-bloquantes-${runId}`, 'temps_anomalies_bloquantes',
-            { executionId: runId, bloquantes: blockingTotal, periode: `${input.periodStart} → ${input.periodEnd}` },
+            { execution_id: runId, bloquantes: blockingTotal, periode: `${input.periodStart} → ${input.periodEnd}` },
             'calc_run', runId);
         }
         if (employees.length * days >= LARGE_RUN_NOTIFY_THRESHOLD) {
           await this.notify.publishEventTx(tx, tenantId, {
             eventKey: `temps-calcul-termine-${runId}`,
             templateKey: 'temps_calcul_termine',
-            payload: { executionId: runId, statut: status, resultats: written, inchanges: unchanged },
+            payload: { execution_id: runId, statut: status, resultats: written, inchanges: unchanged },
             recipients: [{ userId: actor }],
             source: 'business', subjectType: 'calc_run', subjectId: runId, createdBy: actor,
           });
@@ -314,7 +314,7 @@ export class CalcService {
       });
       await this.notifyPermissionHolders(tx, tenantId, actor, 'time.calc_run',
         `temps-calcul-echec-${failedId}`, 'temps_calcul_echec',
-        { executionId: failedId, erreur: note, periode: `${input.periodStart} → ${input.periodEnd}` },
+        { execution_id: failedId, erreur: note, periode: `${input.periodStart} → ${input.periodEnd}` },
         'calc_run', failedId);
       const run = await this.readRun(tx, failedId);
       return { kind: 'ok', run: run! };

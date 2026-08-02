@@ -1191,11 +1191,13 @@ export const OPENAPI_SPEC = {
         summary: 'Déclencher un CALCUL de présence (synchrone, borné, audité) — time.calc_run',
         description:
           'Transforme les événements normalisés en résultats journaliers VERSIONNÉS sans jamais modifier bruts, ' +
-          'horaires, affectations ni paramètres. Idempotent : contenu identique ⇒ aucune écriture. Deux exécutions ' +
-          'ACTIVES du même tenant ne peuvent pas se chevaucher en période (contrainte d’exclusion PostgreSQL) ⇒ 409. ' +
+          'horaires, affectations ni paramètres. Idempotent : contenu identique ⇒ aucune écriture. Concurrence tranchée ' +
+          'par PostgreSQL (contrainte d’exclusion sur les exécutions ACTIVES du tenant) : une exécution chevauchante ' +
+          'ATTEND la première puis repart de l’état commité — sérialisée, zéro double écriture ; 409 si l’exécution ' +
+          'première est encore active à son commit (worker asynchrone futur). ' +
           'Corps : { periodStart, periodEnd, scopeKind: tenant|company|site|unit|employee, scopeId?, reason }.',
         security: bearer,
-        responses: { '201': { description: '{ run: statuts, compteurs, durée, version du moteur } — heures sup CANDIDATES, aucun montant' }, '409': err('Exécution active chevauchante'), '400': err('Période ou périmètre hors bornes') },
+        responses: { '201': { description: '{ run: statuts, compteurs, durée, version du moteur } — heures sup CANDIDATES, aucun montant' }, '409': err('Exécution active persistante chevauchante'), '400': err('Période ou périmètre hors bornes') },
       },
     },
     '/time/calc/recalc': {
@@ -1297,8 +1299,8 @@ export const OPENAPI_SPEC = {
     },
     '/time/anomalies/{id}/state': {
       post: {
-        summary: 'Changer l’ÉTAT d’une anomalie (open → acknowledged | dismissed…) — time.anomalies_manage, audité',
-        description: '« resolved » est RÉSERVÉ au circuit de correction E10.3 : demande explicite ⇒ 409. Machine à états portée par un TRIGGER PostgreSQL.',
+        summary: 'Changer l’ÉTAT d’une anomalie (open → acknowledged | dismissed…) — time.anomalies_manage À PORTÉE RÉELLE, audité',
+        description: '« resolved » est RÉSERVÉ au circuit de correction E10.3 : demande explicite ⇒ 409. Machine à états portée par un TRIGGER PostgreSQL. La permission est exigée par le SERVICE avec la portée E8/E9 (un responsable d’unité agit sur SON périmètre ; hors périmètre : introuvable, pas interdit).',
         security: bearer,
         parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
         responses: { '200': { description: 'État changé' }, '409': err('Transition interdite ou resolved demandé') },
