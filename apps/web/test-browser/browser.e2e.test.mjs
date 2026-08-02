@@ -50,6 +50,10 @@ const slug = `pw-${rid}`;
 const adminEmail = `pwa.adm.${rid}@demo.bj`;
 const viewerEmail = `pwa.view.${rid}@demo.bj`;
 const mfaEmail = `pwa.mfa.${rid}@demo.bj`;
+// Compte DÉDIÉ aux parcours temps + mobile : le limiteur de connexion (10/min par
+// identité — comportement de PRODUCTION, jamais assoupli pour les tests) est sinon
+// atteint par l'accumulation des connexions admin de la suite (CI run 30714332862).
+const timeAdmEmail = `pwa.tadm.${rid}@demo.bj`;
 
 let app = null;
 let webServer = null;
@@ -160,6 +164,8 @@ before(async (tc) => {
     'employees.view_history', 'workflow.view', 'org.view', 'users.view', 'audit.view', 'parameters.view', 'sessions.revoke',
     'time.schedules_view', 'time.punches_import', 'time.punches_view', 'time.punches_view_errors', 'time.devices_manage']);
   await seedUser(viewerEmail, ['employees.view']);
+  await seedUser(timeAdmEmail, ['employees.view', 'workflow.view', 'org.view',
+    'time.schedules_view', 'time.punches_import', 'time.punches_view', 'time.punches_view_errors', 'time.devices_manage']);
   await seedUser(mfaEmail, ['employees.view']);
   seedHr();
 
@@ -432,7 +438,7 @@ test('TEMPS (E10.1) : import réel par l’API, registre visible, et HORS LIGNE 
   const apiBase = `http://127.0.0.1:${API_PORT}/api/v1`;
   const loginRes = await fetch(`${apiBase}/auth/login`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ tenantSlug: slug, email: adminEmail, password: P }),
+    body: JSON.stringify({ tenantSlug: slug, email: timeAdmEmail, password: P }),
   });
   const { token } = await loginRes.json();
   const imp = await fetch(`${apiBase}/time/punches/import`, {
@@ -448,7 +454,7 @@ test('TEMPS (E10.1) : import réel par l’API, registre visible, et HORS LIGNE 
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await ctx.newPage();
   await shot(page, 'temps-pointages', async () => {
-    await login(page, adminEmail);
+    await login(page, timeAdmEmail);
     // Registre brut : le pointage importé est là, statut apparié.
     await page.click('a[href="#/time/punches"]');
     await page.waitForSelector('tbody tr');
@@ -512,7 +518,7 @@ test('mobile : connexion, tableau de bord, menu tiroir et liste en cartes', { sk
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const page = await ctx.newPage();
   await shot(page, 'mobile', async () => {
-    await login(page, adminEmail);
+    await login(page, timeAdmEmail);
     await page.click('.header button');
     await page.waitForSelector('.shell.nav-open');
     await page.click('a[href="#/employees"]');

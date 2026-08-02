@@ -12,7 +12,7 @@
 --    début du jour de cycle ; end_minute > 1440 signifie « le lendemain » (22:00→06:00
 --    = 1320→1800) — aucune interprétation, une seule représentation possible ;
 --  - AUCUNE règle juridique en dur : durées normales, tolérances, seuils, arrondis,
---    majorations sont des PARAMÈTRES E4 (clés TIME-*) résolus à la date de l'événement
+--    majorations sont des PARAMÈTRES E4 (famille temps.*) résolus à la date de l'événement
 --    par le moteur E10.2 ; cette migration ne fixe AUCUN taux ni seuil ;
 --  - AUCUNE donnée biométrique : KORA ne stocke ni gabarit, ni empreinte, ni image —
 --    seulement l'identifiant externe, l'horodatage, le dispositif et la référence
@@ -24,7 +24,7 @@ CREATE SCHEMA time;
 
 -- ---------------------------------------------------------------------------
 -- Fuseau horaire par SITE (E8 reste la source de vérité des sites).
--- Résolution effective : dispositif → site → paramètre tenant TIME-01 → 'UTC'.
+-- Résolution effective : dispositif → site → paramètre tenant temps.fuseau.defaut → 'UTC'.
 -- ---------------------------------------------------------------------------
 ALTER TABLE org.sites ADD COLUMN time_zone text
   CHECK (time_zone IS NULL OR time_zone ~ '^[A-Za-z_]+(/[A-Za-z0-9_+-]+){0,2}$');

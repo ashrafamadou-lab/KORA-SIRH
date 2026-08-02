@@ -4,7 +4,7 @@
  * exceptions individuelles/collectives, horaire APPLICABLE à une date.
  *
  * AUCUNE règle juridique ici : durées, tolérances, seuils, majorations sont des
- * paramètres E4 (clés TIME-*) que le moteur E10.2 résoudra à la date de l'événement.
+ * paramètres E4 (famille de clés temps.*) que le moteur E10.2 résoudra à la date de l'événement.
  */
 import { Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';

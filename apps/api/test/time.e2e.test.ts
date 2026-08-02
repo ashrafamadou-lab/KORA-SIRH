@@ -81,10 +81,15 @@ before(async () => {
   // chef : la portée UNITÉ est ajoutée après création de l'organisation (trigger E8).
   await seedUser(tenantAId, chefEmail, ['time.punches_view', 'time.schedules_view'], false);
 
-  // Paramètre E4 « TIME-01 » (fuseau par défaut du tenant) : FIXTURE active — le cycle
+  // Paramètre E4 « temps.fuseau.defaut » (fuseau par défaut du tenant) : FIXTURE active — le cycle
   // de vie complet (brouillon→contreseing→activation) est prouvé par la suite config.
-  psql(`INSERT INTO compliance.legal_parameters (tenant_id, country_code, key, value, effective_from, status, is_legal_sensitive, confidence)
-        VALUES ('${tenantAId}', 'BJ', 'TIME-01', '"Africa/Porto-Novo"', '2020-01-01', 'active', false, 'verified')`);
+  // Le garde-fou E4 exige source + vérificateur pour tout paramètre actif (CI run
+  // 30714332862) : la fixture les porte, comme le ferait le circuit réel.
+  psql(`INSERT INTO compliance.legal_parameters
+          (tenant_id, country_code, key, value, effective_from, status, is_legal_sensitive,
+           confidence, source_text, verified_by, verified_at)
+        VALUES ('${tenantAId}', 'BJ', 'temps.fuseau.defaut', '"Africa/Porto-Novo"', '2020-01-01', 'active', false,
+                'verified', 'Fuseau du siège (référentiel IANA) — paramètre opérationnel', 'fixture-e2e', '2026-01-01')`);
 
   app = await createApp();
   await app.listen(0);
@@ -487,7 +492,7 @@ test('12 Excel : import réel (déflaté), série de date convertie ; cellule à
   assert.ok(badr.errors.some((e) => e.error.includes('formule')), 'refus EXPLICITE des formules');
 });
 
-test('13 fuseau par PARAMÈTRE E4 à la date : sans dispositif ni site, TIME-01 s’applique', async () => {
+test('13 fuseau par PARAMÈTRE E4 à la date : sans dispositif ni site, temps.fuseau.defaut s’applique', async () => {
   const adm = await token(slugA, admEmail);
   // Import SANS dispositif ni site : la chaîne descend jusqu'au paramètre tenant.
   const csv = `matricule;dateheure;sens\n${MAT1};2026-07-09 10:00;E\n`;
@@ -498,7 +503,7 @@ test('13 fuseau par PARAMÈTRE E4 à la date : sans dispositif ni site, TIME-01 
   const tzRow = psql(`SELECT ev.tz || '|' || (ev.occurred_at AT TIME ZONE 'UTC')::text FROM time.punch_events ev
     JOIN time.raw_punches r ON r.id = ev.raw_punch_id
     WHERE r.source_datetime_raw = '2026-07-09 10:00' AND ev.tenant_id='${tenantAId}'`);
-  assert.equal(tzRow, 'Africa/Porto-Novo|2026-07-09 09:00:00', 'TIME-01 résolu à la date de l’événement');
+  assert.equal(tzRow, 'Africa/Porto-Novo|2026-07-09 09:00:00', 'temps.fuseau.defaut résolu à la date de l’événement');
 });
 
 test('14 saisie MANUELLE : lot source=manual, idempotente (rejeu ⇒ 409), auditée', async () => {

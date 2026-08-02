@@ -4,7 +4,7 @@
  * renormalisation, saisie manuelle.
  *
  * La normalisation ne touche JAMAIS le brut : elle écrit/réécrit l'événement dérivé
- * (1:1). Résolution du fuseau : dispositif → site → paramètre E4 « TIME-01 » à la
+ * (1:1). Résolution du fuseau : dispositif → site → paramètre E4 « temps.fuseau.defaut » à la
  * date de l'événement → 'UTC' (noté). Un identifiant externe ne peut par
  * construction viser que les salariés DU tenant (RLS + FK composites).
  */
@@ -198,10 +198,10 @@ export class PunchesService {
   // NORMALISATION (partagée : import, saisie manuelle, renormalisation)
   // ------------------------------------------------------------------
 
-  /** Fuseau par défaut du tenant, résolu E4 à la date de l'événement (TIME-01), sinon UTC. */
+  /** Fuseau par défaut du tenant, résolu E4 à la date de l'événement (temps.fuseau.defaut), sinon UTC. */
   private async tenantDefaultTz(tx: Prisma.TransactionClient, tenantId: string, date: string): Promise<{ tz: string; fromParam: boolean }> {
     const rows = await tx.$queryRaw<Array<{ value: unknown }>>`
-      SELECT value FROM compliance.parameter_value_at('TIME-01', 'BJ'::char(2), ${tenantId}::uuid, ${date}::date)`;
+      SELECT value FROM compliance.parameter_value_at('temps.fuseau.defaut', 'BJ'::char(2), ${tenantId}::uuid, ${date}::date)`;
     const raw = rows[0]?.value;
     const v = typeof raw === 'string' ? raw : (raw !== null && typeof raw === 'object' && 'value' in (raw as object))
       ? String((raw as Record<string, unknown>)['value']) : null;
@@ -255,7 +255,7 @@ export class PunchesService {
       else {
         const d = await this.tenantDefaultTz(tx, tenantId, localDate);
         tz = d.tz;
-        if (!d.fromParam) note = 'fuseau par défaut UTC (ni dispositif, ni site, ni paramètre TIME-01)';
+        if (!d.fromParam) note = 'fuseau par défaut UTC (ni dispositif, ni site, ni paramètre temps.fuseau.defaut)';
       }
       const conv = localToUtc({ y: parsed.y, mo: parsed.mo, d: parsed.d }, { h: parsed.h, mi: parsed.mi, s: parsed.s }, tz);
       if (conv.status === 'invalid') {
