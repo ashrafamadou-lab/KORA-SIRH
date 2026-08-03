@@ -591,46 +591,59 @@ export class LeaveBalancesService {
         SELECT unit FROM leave.absence_types WHERE id = ${opts.typeId}::uuid`;
       if (type.length === 0) return { kind: 'not_found' };
       const unit = type[0]!.unit as LeaveUnit;
-      // Régime des jours OUVRABLES : paramètre E4, résolu à la date de début.
-      let workableWeekdays: number[] | undefined;
-      if (unit === 'working_days') {
-        const p = await paramsAt(tx, tenantId, opts.from, ['conges.ouvrables.jours']);
-        const v = p['conges.ouvrables.jours']?.source === 'parametre' ? p['conges.ouvrables.jours']!.value : null;
-        if (Array.isArray(v) && v.every((x) => typeof x === 'number')) workableWeekdays = v as number[];
-      }
-      const days: CountingDay[] = [];
-      for (let d = opts.from; d <= opts.to; d = addDays(d, 1)) {
-        const sched = await this.schedules.resolveScheduleAt(tx, employeeId, d) as {
-          assigned: boolean;
-          day?: { isRest: boolean; startMinute: number | null; endMinute: number | null; breakStartMinute: number | null; breakEndMinute: number | null } | null;
-          exception?: { kind: string; startMinute: number | null; endMinute: number | null } | null;
-          holidays?: unknown[];
-        };
-        const weekday = new Date(`${d}T00:00:00Z`).getUTCDay();
-        const isHoliday = (sched.holidays?.length ?? 0) > 0;
-        let scheduled = false, isRest = true, planned = 0;
-        const day = sched.assigned ? sched.day : null;
-        const exc = sched.exception ?? null;
-        if (exc && (exc.kind === 'closed' || exc.kind === 'rest')) {
-          scheduled = false; isRest = true; planned = 0;
-        } else if (exc && exc.kind === 'special_hours' && exc.startMinute !== null && exc.endMinute !== null) {
-          scheduled = true; isRest = false;
-          planned = exc.endMinute > exc.startMinute ? exc.endMinute - exc.startMinute : exc.endMinute + 1440 - exc.startMinute;
-        } else if (day && !day.isRest && day.startMinute !== null && day.endMinute !== null) {
-          scheduled = true; isRest = false;
-          planned = day.endMinute > day.startMinute ? day.endMinute - day.startMinute : day.endMinute + 1440 - day.startMinute;
-          if (day.breakStartMinute !== null && day.breakEndMinute !== null && day.breakEndMinute > day.breakStartMinute) {
-            planned -= day.breakEndMinute - day.breakStartMinute;
-          }
-        }
-        days.push({ date: d, scheduled, plannedMinutes: planned, isRest, isHoliday, weekday });
-      }
-      const result = countLeave({
-        unit, days, workableWeekdays,
+      const result = await this.countForEmployeeTx(tx, tenantId, employeeId, unit, opts.from, opts.to, {
         halfStart: opts.halfStart, halfEnd: opts.halfEnd,
       });
       return { kind: 'ok', count: { employeeId, typeId: opts.typeId, from: opts.from, to: opts.to, ...result } };
     });
+  }
+
+  /**
+   * Décompte BRUT pour un salarié (E10 : horaire résolu, exceptions, rotations de
+   * nuit, fériés, régime E4 des jours ouvrables) — SANS contrôle de portée : les
+   * appelants (décompte consulté, prévisualisation et soumission de demande E11.2)
+   * portent chacun leurs propres règles d'accès.
+   */
+  async countForEmployeeTx(
+    tx: Tx, tenantId: string, employeeId: string, unit: LeaveUnit, from: string, to: string,
+    opts: { halfStart?: boolean; halfEnd?: boolean } = {},
+  ): Promise<ReturnType<typeof countLeave> & { days: CountingDay[] }> {
+    // Régime des jours OUVRABLES : paramètre E4, résolu à la date de début.
+    let workableWeekdays: number[] | undefined;
+    if (unit === 'working_days') {
+      const p = await paramsAt(tx, tenantId, from, ['conges.ouvrables.jours']);
+      const v = p['conges.ouvrables.jours']?.source === 'parametre' ? p['conges.ouvrables.jours']!.value : null;
+      if (Array.isArray(v) && v.every((x) => typeof x === 'number')) workableWeekdays = v as number[];
+    }
+    const days: CountingDay[] = [];
+    for (let d = from; d <= to; d = addDays(d, 1)) {
+      const sched = await this.schedules.resolveScheduleAt(tx, employeeId, d) as {
+        assigned: boolean;
+        day?: { isRest: boolean; startMinute: number | null; endMinute: number | null; breakStartMinute: number | null; breakEndMinute: number | null } | null;
+        exception?: { kind: string; startMinute: number | null; endMinute: number | null } | null;
+        holidays?: unknown[];
+      };
+      const weekday = new Date(`${d}T00:00:00Z`).getUTCDay();
+      const isHoliday = (sched.holidays?.length ?? 0) > 0;
+      let scheduled = false, isRest = true, planned = 0;
+      const day = sched.assigned ? sched.day : null;
+      const exc = sched.exception ?? null;
+      if (exc && (exc.kind === 'closed' || exc.kind === 'rest')) {
+        scheduled = false; isRest = true; planned = 0;
+      } else if (exc && exc.kind === 'special_hours' && exc.startMinute !== null && exc.endMinute !== null) {
+        scheduled = true; isRest = false;
+        planned = exc.endMinute > exc.startMinute ? exc.endMinute - exc.startMinute : exc.endMinute + 1440 - exc.startMinute;
+      } else if (day && !day.isRest && day.startMinute !== null && day.endMinute !== null) {
+        scheduled = true; isRest = false;
+        planned = day.endMinute > day.startMinute ? day.endMinute - day.startMinute : day.endMinute + 1440 - day.startMinute;
+        if (day.breakStartMinute !== null && day.breakEndMinute !== null && day.breakEndMinute > day.breakStartMinute) {
+          planned -= day.breakEndMinute - day.breakStartMinute;
+        }
+      }
+      days.push({ date: d, scheduled, plannedMinutes: planned, isRest, isHoliday, weekday });
+    }
+    const result = countLeave({ unit, days, workableWeekdays, halfStart: opts.halfStart, halfEnd: opts.halfEnd });
+    return { ...result, days };
   }
 
   private enginePolicy(row: { policyId: string; policyVersion: number; unit: string; content: Record<string, unknown> },

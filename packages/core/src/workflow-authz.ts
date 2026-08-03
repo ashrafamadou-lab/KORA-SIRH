@@ -72,6 +72,14 @@ export function canDecide(actor: ActorContext, ctx: StepAssignmentContext): Auth
   if (!selfAllowed && actor.userId === ctx.createdBy) {
     return { allowed: false, reason: 'séparation des tâches : auto-approbation interdite' };
   }
+  // Exclusion EXPLICITE portée par le contexte d'instance (E11.2) : le
+  // BÉNÉFICIAIRE d'une demande déposée pour lui par un tiers ne statue pas
+  // dessus, même s'il tient le rôle approbateur. Opt-in : absente du contexte,
+  // la règle ne change rien aux circuits existants.
+  const excluded = ctx.instanceContext['excludedDeciderUserIds'];
+  if (Array.isArray(excluded) && excluded.some((u) => u === actor.userId)) {
+    return { allowed: false, reason: 'séparation des tâches : demandeur ou bénéficiaire exclu de la décision' };
+  }
   return { allowed: true };
 }
 

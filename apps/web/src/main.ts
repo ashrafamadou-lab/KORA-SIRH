@@ -36,6 +36,9 @@ import {
 import {
   leaveBalancesPage, leaveCatalogPage, leaveMinePage, leaveRunsPage,
 } from './pages/leave.ts';
+import {
+  leaveCalendarPage, leaveMyRequestsPage, leaveRequestNewPage, leaveTeamRequestsPage,
+} from './pages/leave-requests.ts';
 import { states, stateForError } from './ui/kit.ts';
 
 const appRoot = document.getElementById('app')!;
@@ -100,6 +103,11 @@ const routes: RouteDef[] = [
   { pattern: '/leave/runs', render: () => leaveRunsPage(session), anyOf: ['leave.accrual_run', 'leave.openings_import'] },
   { pattern: '/leave/balances', render: () => leaveBalancesPage(session), anyOf: ['leave.balance_view', 'leave.balance_view_team'] },
   { pattern: '/leave/mine', render: () => leaveMinePage(session), anyOf: ['leave.balance_view_own'] },
+  { pattern: '/leave/requests/new', render: () => leaveRequestNewPage(session), anyOf: ['leave.request_self', 'leave.request_for_others'] },
+  { pattern: '/leave/requests/mine', render: () => leaveMyRequestsPage(session), anyOf: ['leave.requests_view_own', 'leave.request_self'] },
+  { pattern: '/leave/requests/team', render: () => leaveTeamRequestsPage(session, 'team'), anyOf: ['leave.requests_view_team'] },
+  { pattern: '/leave/requests/queue', render: () => leaveTeamRequestsPage(session, 'queue'), anyOf: ['leave.requests_admin'] },
+  { pattern: '/leave/calendar', render: () => leaveCalendarPage(session), anyOf: ['leave.calendar_view', 'leave.requests_view_team'] },
 ];
 
 const CRUMB_BY_PREFIX: Array<[string, () => ReturnType<typeof crumbsOf>]> = [
@@ -131,6 +139,11 @@ const CRUMB_BY_PREFIX: Array<[string, () => ReturnType<typeof crumbsOf>]> = [
   ['/leave/runs', () => crumbsOf(['nav.dashboard', '/'], ['nav.leave', '/leave/mine'], ['nav.leaveRuns', null])],
   ['/leave/balances', () => crumbsOf(['nav.dashboard', '/'], ['nav.leave', '/leave/mine'], ['nav.leaveBalances', null])],
   ['/leave/mine', () => crumbsOf(['nav.dashboard', '/'], ['nav.leave', '/leave/mine'], ['nav.leaveMine', null])],
+  ['/leave/requests/new', () => crumbsOf(['nav.dashboard', '/'], ['nav.leave', '/leave/mine'], ['nav.leaveNew', null])],
+  ['/leave/requests/mine', () => crumbsOf(['nav.dashboard', '/'], ['nav.leave', '/leave/mine'], ['nav.leaveRequests', null])],
+  ['/leave/requests/team', () => crumbsOf(['nav.dashboard', '/'], ['nav.leave', '/leave/mine'], ['nav.leaveTeam', null])],
+  ['/leave/requests/queue', () => crumbsOf(['nav.dashboard', '/'], ['nav.leave', '/leave/mine'], ['nav.leaveQueue', null])],
+  ['/leave/calendar', () => crumbsOf(['nav.dashboard', '/'], ['nav.leave', '/leave/mine'], ['nav.leaveCalendar', null])],
   ['/admin', () => crumbsOf(['nav.dashboard', '/'], ['nav.adminUsers', null])],
   ['/config', () => crumbsOf(['nav.dashboard', '/'], ['nav.config', null])],
   ['/audit', () => crumbsOf(['nav.dashboard', '/'], ['nav.audit', null])],

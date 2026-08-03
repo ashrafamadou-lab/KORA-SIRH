@@ -68,6 +68,11 @@ export const NAV_MAP: NavSection[] = [
     labelKey: 'nav.leave',
     items: [
       { route: '/leave/mine', labelKey: 'nav.leaveMine', anyOf: ['leave.balance_view_own'], icon: 'calendar' },
+      { route: '/leave/requests/new', labelKey: 'nav.leaveNew', anyOf: ['leave.request_self', 'leave.request_for_others'], icon: 'plus' },
+      { route: '/leave/requests/mine', labelKey: 'nav.leaveRequests', anyOf: ['leave.requests_view_own', 'leave.request_self'], icon: 'list' },
+      { route: '/leave/requests/team', labelKey: 'nav.leaveTeam', anyOf: ['leave.requests_view_team'], icon: 'inbox' },
+      { route: '/leave/requests/queue', labelKey: 'nav.leaveQueue', anyOf: ['leave.requests_admin'], icon: 'layers' },
+      { route: '/leave/calendar', labelKey: 'nav.leaveCalendar', anyOf: ['leave.calendar_view', 'leave.requests_view_team'], icon: 'calendar' },
       { route: '/leave/balances', labelKey: 'nav.leaveBalances', anyOf: ['leave.balance_view', 'leave.balance_view_team'], icon: 'people' },
       { route: '/leave/catalog', labelKey: 'nav.leaveCatalog', anyOf: ['leave.types_admin', 'leave.policies_admin', 'leave.accrual_run'], icon: 'sliders' },
       { route: '/leave/runs', labelKey: 'nav.leaveRuns', anyOf: ['leave.accrual_run', 'leave.openings_import'], icon: 'layers' },

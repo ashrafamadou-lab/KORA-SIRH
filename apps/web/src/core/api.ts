@@ -181,6 +181,26 @@ export const API_CONTRACT = {
   leaveAdjust: { method: 'post', path: '/leave/adjust' },
   leaveOpeningsImport: { method: 'post', path: '/leave/openings/import' },
   leaveOpenings: { method: 'get', path: '/leave/openings' },
+  // Demandes de congés (E11.2)
+  leaveRequestCreate: { method: 'post', path: '/leave/requests' },
+  leaveRequestUpdate: { method: 'post', path: '/leave/requests/{id}' },
+  leaveRequestDetail: { method: 'get', path: '/leave/requests/{id}' },
+  leaveRequestPreview: { method: 'get', path: '/leave/requests/preview/{id}' },
+  leaveRequestConfirm: { method: 'post', path: '/leave/requests/{id}/confirm' },
+  leaveRequestSubmit: { method: 'post', path: '/leave/requests/{id}/submit' },
+  leaveRequestDecide: { method: 'post', path: '/leave/requests/{id}/decide' },
+  leaveRequestWithdraw: { method: 'post', path: '/leave/requests/{id}/withdraw' },
+  leaveRequestApply: { method: 'post', path: '/leave/requests/{id}/apply' },
+  leaveRequestCancelApproved: { method: 'post', path: '/leave/requests/{id}/cancel-approved' },
+  leaveRequestExpire: { method: 'post', path: '/leave/requests/{id}/expire' },
+  leaveRequestsMine: { method: 'get', path: '/leave/requests/mine' },
+  leaveRequestsTeam: { method: 'get', path: '/leave/requests/team' },
+  leaveRequestsQueue: { method: 'get', path: '/leave/requests/queue' },
+  leaveRequestAttachmentAdd: { method: 'post', path: '/leave/requests/{id}/attachments' },
+  leaveRequestAttachment: { method: 'get', path: '/leave/requests/attachments/{id}' },
+  leaveRequestAttachmentVerify: { method: 'post', path: '/leave/requests/attachments/{id}/verify' },
+  leaveCalendar: { method: 'get', path: '/leave/calendar' },
+  leaveCalendarExport: { method: 'get', path: '/leave/calendar/export' },
 } as const;
 
 export type ContractKey = keyof typeof API_CONTRACT;
@@ -474,6 +494,64 @@ export interface LeaveImportRow {
   id: string; filename: string | null; asOfDate: string; status: string; atomic: boolean;
   linesReceived: number; linesAccepted: number; linesDuplicated: number; linesRejected: number;
   errorReport: Array<Record<string, unknown>>; sourceNote: string | null; createdAt: string;
+}
+
+// ---------------- Demandes de congés (E11.2) ----------------
+export interface LeaveCheckItem {
+  code: string; level: 'error' | 'warning'; fr: string; en: string;
+  detail?: Record<string, string | number | boolean>;
+}
+export interface LeaveRequestPreviewOut {
+  preview: {
+    requestId: string; status: string; version: number;
+    quantity: number; unit: string;
+    detail: Array<{ date: string; counted: number; why: string }>;
+    errors: string[];
+    checks: LeaveCheckItem[]; blocking: boolean;
+    available: number | null; afterAvailable: number | null;
+    projectedAtStart: number | null; projectionNote: string;
+    retroactive: boolean; circuit: string;
+    policyCode: string | null; policyVersion: number | null;
+  };
+}
+export interface LeaveRequestListRow {
+  id: string; status: string; version: number; onBehalf: boolean; source: string;
+  typeCode: string | null; labelFr: string; labelEn: string; confidential: boolean;
+  matricule?: string; firstName?: string; lastName?: string;
+  startDate: string | null; endDate: string | null; quantity: string | null; unit: string | null;
+  retroactive: boolean | null; comment?: string | null;
+  submittedAt?: string | null; createdAt?: string; confirmedAt?: string | null;
+  attachmentCount?: number; attachmentStatus?: string | null;
+  draft?: Record<string, unknown>;
+}
+export interface LeaveRequestDetailOut {
+  request: LeaveRequestListRow & {
+    onBehalfReason: string | null; instanceId: string | null; cancelInstanceId: string | null;
+    createdBy: string;
+    versions: Array<{
+      version: number; startDate: string; endDate: string; halfDayStart: boolean; halfDayEnd: boolean;
+      hours: string | null; quantity: string; unit: string; checks: LeaveCheckItem[];
+      countDetail: Array<{ date: string; counted: number; why: string }>;
+      retroactive: boolean; retroReason: string | null; comment: string | null;
+      policyId: string | null; policyVersion: number | null; instanceId: string | null; createdAt: string;
+    }>;
+    events: Array<{ version: number | null; event: string; actorUserId: string | null; detail: Record<string, unknown>; createdAt: string }>;
+    attachments: Array<{ id: string; filename: string; mime: string; byteSize: number; sensitive: boolean; verifiedStatus: string; createdAt: string }>;
+  };
+}
+export interface LeaveCalendarOut {
+  calendar: {
+    from: string; to: string;
+    employees: Array<{ id: string; matricule: string; firstName: string; lastName: string }>;
+    entries: Array<{
+      employeeId: string; startDate: string; endDate: string; status: string;
+      labelMode: string; typeCode: string | null; labelFr: string; labelEn: string;
+    }>;
+    holidays: Array<{ date: string; label: string }>;
+    days: Array<{ date: string; headcount: number; approvedAbsent: number; pendingAbsent: number }>;
+    alerts: Array<{ date: string; present: number; minPresence: number; level: string }>;
+    minPresence: number | null;
+  };
 }
 
 export interface TimeExportRow {

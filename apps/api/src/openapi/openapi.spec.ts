@@ -1678,6 +1678,138 @@ export const OPENAPI_SPEC = {
         responses: { '200': { description: '{ items }' } },
       },
     },
+    // ------------------------- Demandes de congés (E11.2) -------------------------
+    '/leave/requests': {
+      post: {
+        summary: 'Créer une demande (brouillon) — leave.request_self, ou leave.request_for_others avec motif tracé (périmètre réel)',
+        security: bearer,
+        responses: { '201': { description: '{ id, onBehalf }' }, '403': err('Permission absente'), '404': err('Salarié hors périmètre') },
+      },
+    },
+    '/leave/requests/{id}': {
+      post: {
+        summary: 'Modifier le BROUILLON (draft/returned uniquement — contenu figé après soumission par la base)',
+        security: bearer,
+        responses: { '200': { description: '{ updated }' }, '409': err('Contenu figé — resoumission requise') },
+      },
+      get: {
+        summary: 'Détail : versions figées, événements, pièces (masquage confidentiel sans leave.sensitive_view)',
+        security: bearer,
+        responses: { '200': { description: '{ request }' } },
+      },
+    },
+    '/leave/requests/preview/{id}': {
+      get: {
+        summary: 'Prévisualisation SERVEUR : décompte E10 réel, contrôles localisés FR/EN, solde avant/après, projection conditionnelle, circuit',
+        security: bearer,
+        responses: { '200': { description: '{ preview: { quantity, checks, blocking, available, afterAvailable, circuit } }' } },
+      },
+    },
+    '/leave/requests/{id}/confirm': {
+      post: {
+        summary: 'Confirmation par le SALARIÉ d’une demande déposée pour lui (paramètre E4 conges.demande.confirmation_salarie)',
+        security: bearer,
+        responses: { '200': { description: '{ confirmed }' } },
+      },
+    },
+    '/leave/requests/{id}/submit': {
+      post: {
+        summary: 'Soumettre : gel versionné + réservation SÉRIALISÉE (verrou par salarié+type) + circuit E3 (retro > sensible > standard)',
+        security: bearer,
+        responses: { '200': { description: '{ instanceId, version, quantity, checks }' }, '400': err('Contrôles bloquants localisés'), '409': err('Aucun circuit actif') },
+      },
+    },
+    '/leave/requests/{id}/decide': {
+      post: {
+        summary: 'Décision (enveloppe E3) : approve/reject/return — séparation des tâches, application HORS transaction de décision',
+        security: bearer,
+        responses: { '200': { description: '{ status, applied?, applicationError? }' }, '403': err('Non assigné / auto-approbation interdite') },
+      },
+    },
+    '/leave/requests/{id}/withdraw': {
+      post: {
+        summary: 'Retrait AVANT décision (brouillon/retourné : direct ; soumis : via E3) — libération de la réservation',
+        security: bearer,
+        responses: { '200': { description: '{}' }, '409': err('Déjà décidée') },
+      },
+    },
+    '/leave/requests/{id}/apply': {
+      post: {
+        summary: 'Reprise IDEMPOTENTE d’une application échouée (absence UNIQUE par version, mouvements à clé unique)',
+        security: bearer,
+        responses: { '200': { description: '{ absenceId }' }, '409': err('Échec constaté — relançable') },
+      },
+    },
+    '/leave/requests/{id}/cancel-approved': {
+      post: {
+        summary: 'Annulation d’une demande APPLIQUÉE : circuit E3 distinct conges_annulation (reversement référencé, jamais une suppression)',
+        security: bearer,
+        responses: { '200': { description: '{ instanceId }' }, '409': err('Circuit déjà ouvert / statut inadapté') },
+      },
+    },
+    '/leave/requests/{id}/expire': {
+      post: {
+        summary: 'Expiration ADMINISTRATIVE (leave.requests_admin) : demande retournée non resoumise uniquement — jamais une décision silencieuse',
+        security: bearer,
+        responses: { '200': { description: '{ expired }' } },
+      },
+    },
+    '/leave/requests/mine': {
+      get: {
+        summary: 'Mes demandes (salarié et demandes déposées par moi)',
+        security: bearer,
+        responses: { '200': { description: '{ items }' } },
+      },
+    },
+    '/leave/requests/team': {
+      get: {
+        summary: 'Demandes de mon équipe résolue (leave.requests_view_team) — types confidentiels en libellé générique, motifs masqués',
+        security: bearer,
+        responses: { '200': { description: '{ items, delayDays }' } },
+      },
+    },
+    '/leave/requests/queue': {
+      get: {
+        summary: 'File RH (leave.requests_admin, portée réelle) : filtres sensibles/rétroactives/échecs, suivi des délais (paramètre E4)',
+        security: bearer,
+        responses: { '200': { description: '{ items, delayDays }' } },
+      },
+    },
+    '/leave/requests/{id}/attachments': {
+      post: {
+        summary: 'Joindre un justificatif (contenu FIGÉ, sensibilité héritée du type, ≤ 5 Mo)',
+        security: bearer,
+        responses: { '201': { description: '{ id, sha256 }' } },
+      },
+    },
+    '/leave/requests/attachments/{id}': {
+      get: {
+        summary: 'Télécharger un justificatif — pièce sensible : salarié, vérificateur ou leave.sensitive_view ; CHAQUE accès journalisé',
+        security: bearer,
+        responses: { '200': { description: '{ filename, mime, contentBase64 }' }, '403': err('Accès restreint') },
+      },
+    },
+    '/leave/requests/attachments/{id}/verify': {
+      post: {
+        summary: 'Vérifier un justificatif (leave.attachments_verify) : un STATUT accepté/rejeté — séparation des tâches, jamais le contenu exposé',
+        security: bearer,
+        responses: { '200': { description: '{ verified }' } },
+      },
+    },
+    '/leave/calendar': {
+      get: {
+        summary: 'Calendrier d’équipe (leave.calendar_view ou équipe résolue) : absences, demandes en attente, fériés, capacité vs seuil E4 — confidentiel = « indisponible »',
+        security: bearer,
+        responses: { '200': { description: '{ calendar: { employees, entries, holidays, days, alerts } }' } },
+      },
+    },
+    '/leave/calendar/export': {
+      get: {
+        summary: 'Export CSV du calendrier (leave.calendar_export) — audité ; ne dit JAMAIS plus que l’écran',
+        security: bearer,
+        responses: { '200': { description: '{ csv }' } },
+      },
+    },
     '/openapi.json': {
       get: { summary: 'Cette spécification', responses: { '200': { description: 'OpenAPI 3.0.3' } } },
     },
