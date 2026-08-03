@@ -49,6 +49,11 @@ export class LeaveAccrualService {
       if (!(await holdsPermission(tx, actor, 'leave.accrual_run'))) {
         return { kind: 'forbidden' as const, reason: 'permission requise : leave.accrual_run' };
       }
+      // Sérialisation DÉTERMINISTE des départs concurrents (même leçon que le moteur
+      // de présence, run CI 30821391737) : verrou consultatif transactionnel par
+      // tenant AVANT l'insertion — deux INSERT simultanés ne se deadlockent jamais
+      // sur la vérification d'exclusion. La contrainte RESTE le garde-fou ultime.
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${tenantId}::text || ':leave_accrual_run'))`;
       // Exécution déclarée (le verrou anti-chevauchement est la contrainte d'exclusion).
       let runId: string;
       try {

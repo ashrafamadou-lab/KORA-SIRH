@@ -153,6 +153,12 @@ export class CalcService {
             reason: `périmètre trop large : ${employees.length} salarié(s) × ${days} jour(s) > ${MAX_RUN_EVALUATIONS} — réduire la période ou le périmètre (worker asynchrone : évolution prévue)`,
           };
         }
+        // Sérialisation DÉTERMINISTE des départs concurrents : verrou consultatif
+        // transactionnel par tenant AVANT l'insertion. Sans lui, deux INSERT
+        // simultanés peuvent s'attendre MUTUELLEMENT pendant la vérification de la
+        // contrainte d'exclusion ⇒ deadlock 40P01 (constaté au run CI 30821391737).
+        // La contrainte d'exclusion RESTE le garde-fou ultime en base.
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${tenantId}::text || ':time_calc_run'))`;
         // L'insertion pose le VERROU d'exclusion : une exécution active chevauchante
         // du même tenant attendra la fin de cette transaction puis recevra 23P01.
         const startedAt = Date.now();
