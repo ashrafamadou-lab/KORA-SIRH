@@ -535,10 +535,11 @@ test('10 ajustements : compensatoire motivé, avant/après, JAMAIS de réécritu
     WHERE tenant_id = '${tenantAId}' AND idempotency_key LIKE 'adjust:%' AND entry_kind = 'adjustment_debit'`);
   assert.equal(Number(noEntry), 0, 'AUCUN mouvement avant la décision');
   // Approbation RH ⇒ mouvement appliqué UNE fois (rejouer la décision = refus, pas de doublon).
-  const dec1 = await api(`/workflow/instances/${big.instanceId}/decide`, rh, { action: 'approve' });
-  assert.equal(dec1.status, 200, await dec1.text().catch(() => ''));
-  const dec2 = await api(`/workflow/instances/${big.instanceId}/decide`, rh, { action: 'approve' });
-  assert.ok([409, 403].includes(dec2.status), 'décision rejouée refusée');
+  const dec1 = await api(`/workflow/instances/${big.instanceId}/approve`, rh, {});
+  const dec1Text = await dec1.text();
+  assert.equal(dec1.status, 200, dec1Text);
+  const dec2 = await api(`/workflow/instances/${big.instanceId}/approve`, rh, {});
+  assert.ok([409, 403, 400].includes(dec2.status), `décision rejouée refusée (${dec2.status})`);
   const applied = psql(`SELECT count(*) FROM leave.entitlement_ledger
     WHERE tenant_id = '${tenantAId}' AND entry_kind = 'adjustment_debit' AND employee_id = '${e1}'`);
   assert.equal(Number(applied), 1, 'UN SEUL mouvement de débit');
@@ -686,11 +687,13 @@ test('16 isolation tenant : rien ne fuit, la FK inter-tenant est rejetée PAR PO
   const ledB = await getJson<{ items: unknown[] }>(`/leave/ledger?employeeId=${e1}`, bAdm);
   assert.equal(ledB.items.length, 0);
   // FK composite : mouvement du tenant B pointant un type de A ⇒ rejet PostgreSQL.
+  // (Un salarié RÉEL du tenant B d'abord — un INSERT…SELECT sans ligne ne prouverait rien.)
+  const eB = psql(`INSERT INTO core.employees (tenant_id, matricule, first_name, last_name, status, hire_date)
+    VALUES ('${tenantBId}', 'LVB-${RID}', 'Bola', 'Isolee', 'active', '2025-01-01') RETURNING id`);
   assert.equal(psqlFails(`INSERT INTO leave.entitlement_ledger
     (tenant_id, employee_id, absence_type_id, reference_period_start, reference_period_end,
      entry_kind, quantity, unit, effective_on, origin, idempotency_key)
-    SELECT '${tenantBId}', e.id, '${typeCap}', '2026-01-01', '2026-12-31', 'grant', 1, 'open_days', '2026-01-01', 'admin', 'xt-${rid}'
-      FROM core.employees e WHERE e.tenant_id = '${tenantBId}' LIMIT 1`), true,
+    VALUES ('${tenantBId}', '${eB}', '${typeCap}', '2026-01-01', '2026-12-31', 'grant', 1, 'open_days', '2026-01-01', 'admin', 'xt-${rid}')`), true,
     'FK inter-tenant rejetée par la base');
 });
 

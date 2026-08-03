@@ -17,7 +17,7 @@ import {
   LEAVE_ENGINE_VERSION, expectedAccruals, planRollover, referencePeriodOf,
   type EmploymentSpan, type ResolvedPolicy,
 } from '../../../../packages/core/src/leave.ts';
-import { DATE_RE, holdsPermission, type TimeOutcome } from './leave-access';
+import { DATE_RE, holdsPermission, pgCode, type TimeOutcome } from './leave-access';
 import { LeaveCatalogService, monthsBetween, type ResolvedPolicyRow } from './catalog.service';
 
 export interface AccrualRunInput {
@@ -64,7 +64,7 @@ export class LeaveAccrualService {
           RETURNING id`;
         runId = ins[0]!.id;
       } catch (e) {
-        if ((e as Error).message.includes('accrual_runs_no_concurrent_overlap')) {
+        if (pgCode(e) === '23P01') {
           return { kind: 'conflict' as const, reason: 'une exécution ACTIVE chevauche déjà cette période pour ce tenant' };
         }
         throw e;

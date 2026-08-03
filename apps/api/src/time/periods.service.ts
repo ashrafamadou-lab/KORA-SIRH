@@ -79,7 +79,8 @@ export class PeriodsService {
         return { kind: 'ok', id: rows[0]!.id };
       } catch (e) {
         const msg = (e as Error).message;
-        if (msg.includes('periods_no_overlap')) {
+        const codeMatch = /Code: `?(\w+)`?/.exec(msg)?.[1] ?? (e as { meta?: { code?: string } }).meta?.code;
+        if (msg.includes('periods_no_overlap') || codeMatch === '23P01') {
           return { kind: 'conflict', reason: 'une période active du même périmètre chevauche cet intervalle (une seule période active compatible — garanti par la base)' };
         }
         return { kind: 'invalid', reason: msg.split('\n')[0] ?? 'période refusée' };

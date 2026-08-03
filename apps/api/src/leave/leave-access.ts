@@ -73,3 +73,15 @@ export function numericParam(p: ParamProvenance | undefined): number | null {
   const v = p.value;
   return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null;
 }
+
+/**
+ * Code SQLSTATE d'une erreur Prisma de requête brute. Le TEXTE du message n'est
+ * pas contractuel (constaté au run CI 30818155276 : « Code: 23505. Message: N/A »),
+ * le CODE l'est : 23505 unicité, 23503 clé étrangère, 23P01 exclusion, 23514 check.
+ */
+export function pgCode(e: unknown): string | null {
+  const meta = (e as { meta?: { code?: unknown } } | null)?.meta;
+  if (meta && typeof meta.code === 'string') return meta.code;
+  const m = /Code: `?(\w+)`?/.exec((e as Error)?.message ?? '');
+  return m?.[1] ?? null;
+}

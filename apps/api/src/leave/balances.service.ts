@@ -25,7 +25,7 @@ import {
   countLeave, projectBalance, type CountingDay, type LeaveUnit, type ResolvedPolicy,
 } from '../../../../packages/core/src/leave.ts';
 import {
-  DATE_RE, holdsPermission, linkedEmployee, numericParam, paramsAt, scopeSetFor,
+  DATE_RE, holdsPermission, linkedEmployee, numericParam, paramsAt, pgCode, scopeSetFor,
   teamEmployeeIds, type ScopeSet, type TimeOutcome,
 } from './leave-access';
 import { LeaveCatalogService } from './catalog.service';
@@ -427,7 +427,7 @@ export class LeaveBalancesService {
       });
       return { kind: 'ok', entryId: rows[0]!.id };
     } catch (e) {
-      if ((e as Error).message.includes('idempotency_key')) {
+      if (pgCode(e) === '23505') {
         return { kind: 'conflict', reason: 'clé d\'idempotence déjà utilisée : ajustement DÉJÀ enregistré' };
       }
       throw e;

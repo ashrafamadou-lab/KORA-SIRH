@@ -9,7 +9,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
 import { auditAuth } from '../auth/audit.util';
 import {
-  DATE_RE, OPERATING_COUNTRY, holdsPermission, numericParam, paramsAt, type TimeOutcome,
+  DATE_RE, OPERATING_COUNTRY, holdsPermission, numericParam, paramsAt, pgCode, type TimeOutcome,
 } from './leave-access';
 
 const CODE_RE = /^[A-Z0-9][A-Z0-9_-]{1,29}$/;
@@ -104,7 +104,7 @@ export class LeaveCatalogService {
         });
         return { kind: 'ok', id: rows[0]!.id };
       } catch (e) {
-        if ((e as Error).message.includes('absence_types_tenant_id_code_key')) {
+        if (pgCode(e) === '23505') {
           return { kind: 'conflict', reason: `code « ${input.code} » déjà utilisé` };
         }
         throw e;
@@ -228,9 +228,9 @@ export class LeaveCatalogService {
         });
         return { kind: 'ok', id: rows[0]!.id };
       } catch (e) {
-        const msg = (e as Error).message;
-        if (msg.includes('policies_tenant_id_code_key')) return { kind: 'conflict', reason: `code « ${input.code} » déjà utilisé` };
-        if (msg.includes('foreign key')) return { kind: 'invalid', reason: 'type d\'absence, société ou site inconnu dans ce tenant' };
+        const code = pgCode(e);
+        if (code === '23505') return { kind: 'conflict', reason: `code « ${input.code} » déjà utilisé` };
+        if (code === '23503') return { kind: 'invalid', reason: 'type d\'absence, société ou site inconnu dans ce tenant' };
         throw e;
       }
     });
@@ -300,7 +300,7 @@ export class LeaveCatalogService {
       try {
         await tx.$executeRaw`UPDATE leave.policies SET status = ${status}, updated_at = now() WHERE id = ${policyId}::uuid`;
       } catch (e) {
-        if ((e as Error).message.includes('policies_one_active_per_population')) {
+        if (pgCode(e) === '23505') {
           return { kind: 'conflict', reason: 'une politique ACTIVE du même type couvre déjà exactement cette population (une seule politique active par population — garanti par la base)' };
         }
         throw e;
