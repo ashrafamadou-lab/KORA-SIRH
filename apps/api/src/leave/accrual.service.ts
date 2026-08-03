@@ -53,7 +53,10 @@ export class LeaveAccrualService {
       // de présence, run CI 30821391737) : verrou consultatif transactionnel par
       // tenant AVANT l'insertion — deux INSERT simultanés ne se deadlockent jamais
       // sur la vérification d'exclusion. La contrainte RESTE le garde-fou ultime.
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${tenantId}::text || ':leave_accrual_run'))`;
+      // $executeRaw impératif : pg_advisory_xact_lock renvoie void, que $queryRaw
+      // ne sait pas désérialiser (500 constaté au run CI 30850506848) — même
+      // convention que le verrou d'activation du Config-Center (config.service).
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${tenantId}::text || ':leave_accrual_run'))`;
       // Exécution déclarée (le verrou anti-chevauchement est la contrainte d'exclusion).
       let runId: string;
       try {
