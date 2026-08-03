@@ -251,8 +251,11 @@ test('01 fixtures : organisation, salariés (manager lié), horaire, circuits E3
       { index: 2, name: 'Supplément période close', approverType: 'role', approverRef: 'rh-temps', condition: { field: 'periodClosed', op: 'eq', value: true } },
     ],
   });
-  assert.equal(defC.status, 201, await defC.text().catch(() => ''));
-  const defCId = ((await defC.json()) as { id: string }).id;
+  // Corps lu UNE seule fois (leçon CI 30757393308, réapprise au run 30803207816 :
+  // l'argument message d'un assert est évalué MÊME quand l'assertion passe).
+  const defCText = await defC.text();
+  assert.equal(defC.status, 201, defCText);
+  const defCId = (JSON.parse(defCText) as { id: string }).id;
   assert.equal((await api(`/workflow/definitions/${defCId}/activate`, adm)).status, 200);
   const defR = await api('/workflow/definitions', adm, {
     key: 'temps_reouverture', name: 'Réouverture de période',
