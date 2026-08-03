@@ -1515,6 +1515,169 @@ export const OPENAPI_SPEC = {
         responses: { '200': { description: '{ filename, mime, contentBase64, sha256 }' }, '403': err('Permission absente') },
       },
     },
+    // ------------------------- Congés & absences (E11.1) -------------------------
+    '/leave/types': {
+      get: {
+        summary: 'Catalogue des types d’absence (toute permission congés)',
+        security: bearer,
+        responses: { '200': { description: '{ items: [...] } — code, libellés FR/EN, catégorie, unité, effets, confidentialité, usage' } },
+      },
+      post: {
+        summary: 'Créer un type — leave.types_admin ; la sémantique sera FIGÉE dès le premier usage',
+        security: bearer,
+        responses: { '201': { description: '{ id }' }, '409': err('Code déjà utilisé') },
+      },
+    },
+    '/leave/types/{id}': {
+      post: {
+        summary: 'Mettre à jour un type (champs NON sémantiques : libellés, statut, notes) — leave.types_admin',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ updated: true }' }, '409': err('Sémantique figée par la base (type déjà utilisé)') },
+      },
+    },
+    '/leave/policies': {
+      get: {
+        summary: 'Politiques versionnées + sélecteurs de population',
+        security: bearer,
+        responses: { '200': { description: '{ items: [...] } — versions incluses' } },
+      },
+      post: {
+        summary: 'Créer une politique — leave.policies_admin',
+        security: bearer,
+        responses: { '201': { description: '{ id }' }, '409': err('Code déjà utilisé') },
+      },
+    },
+    '/leave/policies/{id}/versions': {
+      post: {
+        summary: 'Ajouter une VERSION datée (immuable) — rythme = clé E4 OU valeur tenant, jamais un défaut du moteur',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '201': { description: '{ version }' }, '409': err('Date d’effet non postérieure à la dernière version') },
+      },
+    },
+    '/leave/policies/{id}/status': {
+      post: {
+        summary: 'Activer / retirer une politique — UNE seule active par population et par type (index partiel)',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ updated: true }' }, '409': err('Population déjà couverte par une politique active') },
+      },
+    },
+    '/leave/policies/resolve': {
+      get: {
+        summary: 'Politique applicable à un salarié/type/date — égalité de spécificité = 409 EXPLICITE',
+        security: bearer,
+        parameters: [
+          { name: 'employeeId', in: 'query', required: true, schema: { type: 'string', format: 'uuid' } },
+          { name: 'typeId', in: 'query', required: true, schema: { type: 'string', format: 'uuid' } },
+          { name: 'date', in: 'query', required: false, schema: { type: 'string', format: 'date' } },
+        ],
+        responses: { '200': { description: '{ resolution: {...} | null }' }, '409': err('Politiques ambiguës') },
+      },
+    },
+    '/leave/policies/{id}/population': {
+      get: {
+        summary: 'Population couverte par la politique à une date (compte + échantillon)',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ count, sample }' } },
+      },
+    },
+    '/leave/accrual/run': {
+      post: {
+        summary: 'Exécution d’acquisition / report-expiration / régularisation — leave.accrual_run, idempotente par CLÉS, anti-concurrente par EXCLUSION',
+        security: bearer,
+        responses: { '201': { description: '{ run } — compteurs écrits/déjà acquis/erreurs' }, '409': err('Exécution active chevauchante') },
+      },
+    },
+    '/leave/accrual/runs': {
+      get: {
+        summary: 'Historique des exécutions d’acquisition',
+        security: bearer,
+        responses: { '200': { description: '{ items }' } },
+      },
+    },
+    '/leave/balances': {
+      get: {
+        summary: 'Soldes par salarié (portées RÉELLES : équipe du responsable résolu ou portée RH) — accès audité',
+        security: bearer,
+        parameters: [
+          { name: 'employeeId', in: 'query', required: false, schema: { type: 'string', format: 'uuid' } },
+          { name: 'typeId', in: 'query', required: false, schema: { type: 'string', format: 'uuid' } },
+        ],
+        responses: { '200': { description: '{ items } — acquis, réservé, consommé, expiré, reporté, DISPONIBLE (somme du ledger)' }, '403': err('Aucune portée') },
+      },
+    },
+    '/leave/balances/mine': {
+      get: {
+        summary: 'Mes soldes (leave.balance_view_own) — salarié lié au compte',
+        security: bearer,
+        responses: { '200': { description: '{ linked, items }' } },
+      },
+    },
+    '/leave/projection': {
+      get: {
+        summary: 'Solde PROJETÉ à une date future — clairement distingué du droit acquis',
+        security: bearer,
+        parameters: [
+          { name: 'typeId', in: 'query', required: true, schema: { type: 'string', format: 'uuid' } },
+          { name: 'toDate', in: 'query', required: true, schema: { type: 'string', format: 'date' } },
+        ],
+        responses: { '200': { description: '{ projection: { currentAvailable, projected, plannedAccruals, note } }' } },
+      },
+    },
+    '/leave/ledger': {
+      get: {
+        summary: 'Ledger des droits (leave.ledger_view + portée) — motifs des types confidentiels MASQUÉS sans leave.sensitive_view ; consultation auditée',
+        security: bearer,
+        parameters: [
+          { name: 'employeeId', in: 'query', required: false, schema: { type: 'string', format: 'uuid' } },
+          { name: 'typeId', in: 'query', required: false, schema: { type: 'string', format: 'uuid' } },
+        ],
+        responses: { '200': { description: '{ items } — mouvements append-only, politique/version/paramètres portés' } },
+      },
+    },
+    '/leave/ledger/mine': {
+      get: {
+        summary: 'Mon propre ledger (leave.balance_view_own)',
+        security: bearer,
+        responses: { '200': { description: '{ items }' } },
+      },
+    },
+    '/leave/count': {
+      get: {
+        summary: 'Décompte d’une plage (préversion) : calendrier + horaire E10 réels — ouvrés/ouvrables/calendaires/heures/demi-journées, rotations de nuit sur LEUR journée',
+        security: bearer,
+        parameters: [
+          { name: 'typeId', in: 'query', required: true, schema: { type: 'string', format: 'uuid' } },
+          { name: 'from', in: 'query', required: true, schema: { type: 'string', format: 'date' } },
+          { name: 'to', in: 'query', required: true, schema: { type: 'string', format: 'date' } },
+        ],
+        responses: { '200': { description: '{ count: { quantity, unit, detail[] } } — chaque journée explique son sort' } },
+      },
+    },
+    '/leave/adjust': {
+      post: {
+        summary: 'Ajustement administratif MOTIVÉ (leave.balance_adjust) : mouvement compensatoire, avant/après calculés ; au-delà du seuil E4, circuit E3 conges_ajustement',
+        security: bearer,
+        responses: { '200': { description: '{ status: applied|pending_workflow, before, after, entryId }' }, '409': err('Solde négatif interdit pour ce type / clé déjà utilisée') },
+      },
+    },
+    '/leave/openings/import': {
+      post: {
+        summary: 'Import des soldes d’ouverture (leave.openings_import) : préversion/application, ATOMIQUE par défaut, idempotent (rejeu = 0 doublon), rapport par ligne',
+        security: bearer,
+        responses: { '200': { description: '{ kind: preview|applied|rejected, counts, errors, importId }' } },
+      },
+    },
+    '/leave/openings': {
+      get: {
+        summary: 'Historique des imports de reprise',
+        security: bearer,
+        responses: { '200': { description: '{ items }' } },
+      },
+    },
     '/openapi.json': {
       get: { summary: 'Cette spécification', responses: { '200': { description: 'OpenAPI 3.0.3' } } },
     },

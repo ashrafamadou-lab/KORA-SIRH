@@ -160,6 +160,27 @@ export const API_CONTRACT = {
   timeCloseExports: { method: 'get', path: '/time/closes/{id}/exports' },
   timeCloseExportCreate: { method: 'post', path: '/time/closes/{id}/exports' },
   timePayrollExportDownload: { method: 'get', path: '/time/payroll-exports/{id}/download' },
+  // Congés & absences (E11.1)
+  leaveTypes: { method: 'get', path: '/leave/types' },
+  leaveTypeCreate: { method: 'post', path: '/leave/types' },
+  leaveTypeUpdate: { method: 'post', path: '/leave/types/{id}' },
+  leavePolicies: { method: 'get', path: '/leave/policies' },
+  leavePolicyCreate: { method: 'post', path: '/leave/policies' },
+  leavePolicyVersionAdd: { method: 'post', path: '/leave/policies/{id}/versions' },
+  leavePolicyStatus: { method: 'post', path: '/leave/policies/{id}/status' },
+  leavePolicyResolve: { method: 'get', path: '/leave/policies/resolve' },
+  leavePolicyPopulation: { method: 'get', path: '/leave/policies/{id}/population' },
+  leaveAccrualRun: { method: 'post', path: '/leave/accrual/run' },
+  leaveAccrualRuns: { method: 'get', path: '/leave/accrual/runs' },
+  leaveBalances: { method: 'get', path: '/leave/balances' },
+  leaveBalancesMine: { method: 'get', path: '/leave/balances/mine' },
+  leaveProjection: { method: 'get', path: '/leave/projection' },
+  leaveLedger: { method: 'get', path: '/leave/ledger' },
+  leaveLedgerMine: { method: 'get', path: '/leave/ledger/mine' },
+  leaveCount: { method: 'get', path: '/leave/count' },
+  leaveAdjust: { method: 'post', path: '/leave/adjust' },
+  leaveOpeningsImport: { method: 'post', path: '/leave/openings/import' },
+  leaveOpenings: { method: 'get', path: '/leave/openings' },
 } as const;
 
 export type ContractKey = keyof typeof API_CONTRACT;
@@ -393,6 +414,68 @@ export interface TimePayrollRow {
   lateMinutes: number; earlyDepartureMinutes: number; workedMinutes: number; nightMinutes: number;
   restDayMinutes: number; holidayMinutes: number; overtimeCandidateMinutes: number; correctionsApplied: number;
 }
+// ---------- Congés & absences (E11.1) ----------
+export interface LeaveTypeRow {
+  id: string; code: string; labelFr: string; labelEn: string; category: string;
+  paid: boolean; unit: string; affectsPresence: boolean; affectsPayrollPrep: boolean;
+  justification: string; depositDelayDays: number | null; retroactiveAllowed: boolean;
+  negativeAllowed: boolean; confidential: boolean; workflowRequired: boolean;
+  status: string; effectiveFrom: string; effectiveTo: string | null;
+  policyCount: number; used: boolean;
+}
+export interface LeavePolicyVersionRow {
+  version: number; effectiveFrom: string; accrualMode: string;
+  accrualRateParam: string | null; accrualRateValue: number | null;
+  referencePeriod: string; rounding: string;
+  carryOverMaxParam: string | null; carryOverMaxValue: number | null;
+  accrualRequiresService: boolean; prorataHire: boolean; prorataTermination: boolean;
+  approvalLevels: number; noticeDays: number | null; minBlock: number | null; anticipationAllowed: boolean;
+}
+export interface LeavePolicyRow {
+  id: string; code: string; labelFr: string; labelEn: string; status: string;
+  absenceTypeId: string; typeCode: string; unit: string;
+  countryCode: string | null; companyId: string | null; siteId: string | null;
+  collectiveAgreement: string | null; professionalCategory: string | null;
+  contractType: string | null; employeeStatus: string | null;
+  seniorityMinMonths: number | null; workTime: string; populationKey: string | null;
+  versionCount: number; lastEffectiveFrom: string | null; versions: LeavePolicyVersionRow[] | null;
+}
+export interface LeaveRunRow {
+  id: string; periodStart: string; periodEnd: string; scopeKind: string; reason: string;
+  kind: string; status: string; engineVersion: string; employeesCount: number;
+  entriesWritten: number; entriesSkipped: number; errorsCount: number;
+  errorReport: Array<Record<string, unknown>>; startedAt: string; finishedAt: string | null;
+}
+export interface LeaveBalanceRow {
+  employeeId: string; absenceTypeId: string; unit: string; periodStart: string; periodEnd: string;
+  accrued: number; adjustedOut: number; carriedIn: number; expired: number;
+  reserved: number; consumed: number; available: number;
+  typeCode: string; typeLabelFr: string; typeLabelEn: string; confidential: boolean;
+  matricule: string; firstName: string; lastName: string;
+}
+export interface LeaveLedgerRow {
+  id: string; employeeId: string; matricule: string; firstName: string; lastName: string;
+  absenceTypeId: string; typeCode: string; confidential: boolean;
+  policyId: string | null; policyVersion: number | null;
+  periodStart: string; periodEnd: string; entryKind: string; quantity: number; unit: string;
+  effectiveOn: string; origin: string; businessRef: string | null; reason: string | null;
+  reversalOf: string | null; paramsUsed: Record<string, unknown>; idempotencyKey: string;
+  createdBy: string | null; createdAt: string;
+}
+export interface LeaveProjectionOut {
+  projection: {
+    employeeId: string; typeId: string; toDate: string;
+    currentAvailable: number; projected: number;
+    plannedAccruals: Array<{ effectiveOn: string; quantity: number; monthLabel: string }>;
+    note: string; policyCode: string; policyVersion: number;
+  } | null;
+}
+export interface LeaveImportRow {
+  id: string; filename: string | null; asOfDate: string; status: string; atomic: boolean;
+  linesReceived: number; linesAccepted: number; linesDuplicated: number; linesRejected: number;
+  errorReport: Array<Record<string, unknown>>; sourceNote: string | null; createdAt: string;
+}
+
 export interface TimeExportRow {
   id: string; schemaVersion: string; format: string; revision: number; sha256: string;
   employeesCount: number; status: string; generatedBy: string; generatedAt: string; byteSize: number;

@@ -368,8 +368,8 @@ export class SchedulesService {
     });
   }
 
-  /** Résolution PARTAGEABLE (aussi utilisée par l'écran salarié et E10.2 plus tard). */
-  private async resolveScheduleAt(tx: Prisma.TransactionClient, employeeId: string, date: string): Promise<unknown> {
+  /** Résolution PARTAGEABLE (écran salarié, moteur E10.2, décompte des congés E11). */
+  async resolveScheduleAt(tx: Prisma.TransactionClient, employeeId: string, date: string): Promise<unknown> {
     const asg = await tx.$queryRaw<Array<{ id: string; model_id: string; anchor_date: string; code: string; label_fr: string; label_en: string; kind: string }>>`
       SELECT es.id, es.model_id, es.anchor_date::text, m.code, m.label_fr, m.label_en, m.kind
         FROM time.employee_schedules es JOIN time.schedule_models m ON m.id = es.model_id

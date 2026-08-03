@@ -65,6 +65,15 @@ export const NAV_MAP: NavSection[] = [
     ],
   },
   {
+    labelKey: 'nav.leave',
+    items: [
+      { route: '/leave/mine', labelKey: 'nav.leaveMine', anyOf: ['leave.balance_view_own'], icon: 'calendar' },
+      { route: '/leave/balances', labelKey: 'nav.leaveBalances', anyOf: ['leave.balance_view', 'leave.balance_view_team'], icon: 'people' },
+      { route: '/leave/catalog', labelKey: 'nav.leaveCatalog', anyOf: ['leave.types_admin', 'leave.policies_admin', 'leave.accrual_run'], icon: 'sliders' },
+      { route: '/leave/runs', labelKey: 'nav.leaveRuns', anyOf: ['leave.accrual_run', 'leave.openings_import'], icon: 'layers' },
+    ],
+  },
+  {
     labelKey: 'nav.admin',
     items: [
       { route: '/admin/users', labelKey: 'nav.adminUsers', anyOf: ['users.view'], icon: 'shield' },

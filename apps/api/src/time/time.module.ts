@@ -25,5 +25,6 @@ import { CorrectionsController, PeriodsController } from './corrections.controll
   imports: [AuthModule, RbacModule, NotifyModule, WorkflowModule],
   controllers: [SchedulesController, PunchesController, CalcController, CorrectionsController, PeriodsController],
   providers: [SchedulesService, PunchesService, PunchImportService, CalcService, CorrectionsService, PeriodsService],
+  exports: [SchedulesService],
 })
 export class TimeModule {}

@@ -54,10 +54,12 @@ const mfaEmail = `pwa.mfa.${rid}@demo.bj`;
 // identité — comportement de PRODUCTION, jamais assoupli pour les tests) est sinon
 // atteint par l'accumulation des connexions admin de la suite (CI run 30714332862).
 const timeAdmEmail = `pwa.tadm.${rid}@demo.bj`;
-// Compte ESS (E10.3) : relié au dossier salarié PW-0001, il ne porte QUE la
-// permission de demander pour LUI-MÊME — la séparation demandeur/approbateur
-// sera prouvée par le SERVEUR, pas par le masquage des boutons.
+// Compte ESS (E10.3/E11.1) : relié au dossier salarié PW-0001 — demandes pour
+// SOI et consultation de SES soldes de congés uniquement.
 const essEmail = `pwa.ess.${rid}@demo.bj`;
+// Compte administration des CONGÉS (E11.1) : référentiel, politiques, acquisitions,
+// soldes, ledger, ajustements, reprise.
+const leaveAdmEmail = `pwa.ladm.${rid}@demo.bj`;
 
 let app = null;
 let webServer = null;
@@ -179,7 +181,10 @@ before(async (tc) => {
     'time.preclose_view', 'time.period_manage', 'time.period_close', 'time.period_reopen',
     'time.payroll_view', 'time.payroll_export']);
   await seedUser(mfaEmail, ['employees.view']);
-  const essUserId = await seedUser(essEmail, ['time.correction_request_self']);
+  const essUserId = await seedUser(essEmail, ['time.correction_request_self', 'leave.balance_view_own']);
+  await seedUser(leaveAdmEmail, ['employees.view',
+    'leave.types_admin', 'leave.policies_admin', 'leave.accrual_run', 'leave.balance_adjust',
+    'leave.openings_import', 'leave.balance_view', 'leave.ledger_view']);
   hr = seedHr();
   // Lien compte ↔ dossier salarié : la demande « pour soi » ne vise QUE ce dossier.
   psql(`UPDATE core.employees SET user_id = '${essUserId}' WHERE id = '${hr.e1}'`);
@@ -830,6 +835,141 @@ test('TEMPS (E10.3) : RBAC — sans permission, ni menus, ni écrans, ni API (co
     assert.equal(statuses.corrections, 403, 'file des demandes : 403 sans permission');
     assert.equal(statuses.mine, 403, 'demandes « pour soi » : 403 sans time.correction_request_self');
     assert.equal(statuses.periods, 403, 'périodes : 403 sans permission');
+  });
+  await ctx.close();
+});
+
+test('CONGÉS (E11.1) : acquisition IDEMPOTENTE par l’API, soldes/ledger/Mes soldes via l’UI, HORS LIGNE rien ne survit', { skip: !RUNNABLE }, async () => {
+  const apiBase = `http://127.0.0.1:${API_PORT}/api/v1`;
+  // Paramètre E4 ACTIF : rythme légal d'acquisition (fixture contresignée de test).
+  psql(`INSERT INTO compliance.legal_parameters
+          (tenant_id, country_code, key, value, effective_from, status, is_legal_sensitive, confidence, source_text, verified_by, verified_at)
+        VALUES ('${tenantId}', 'BJ', 'conges.acquisition.taux_mensuel', '2', '2020-01-01', 'active', false,
+                'verified', 'fixture navigateur E11.1', 'fixture-pw', '2026-01-01')`);
+  const login2 = await fetch(`${apiBase}/auth/login`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ tenantSlug: slug, email: leaveAdmEmail, password: P }),
+  });
+  const { token } = await login2.json();
+  const call = async (method, path, body) => {
+    const r = await fetch(`${apiBase}${path}`, {
+      method, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const text = await r.text();
+    return { status: r.status, body: text ? JSON.parse(text) : {} };
+  };
+  // Référentiel : type CAP + politique versionnée dont le rythme est la CLÉ E4.
+  const ty = await call('POST', '/leave/types', {
+    code: 'CAP', labelFr: 'Congé annuel payé', labelEn: 'Paid annual leave',
+    category: 'legal', paid: true, unit: 'open_days',
+  });
+  assert.equal(ty.status, 201, JSON.stringify(ty.body));
+  assert.equal((await call('POST', `/leave/types/${ty.body.id}`, { status: 'active' })).status, 200);
+  const pol = await call('POST', '/leave/policies', {
+    absenceTypeId: ty.body.id, code: 'POL-CAP', labelFr: 'Politique CAP', labelEn: 'CAP policy', countryCode: 'BJ',
+  });
+  assert.equal(pol.status, 201, JSON.stringify(pol.body));
+  assert.equal((await call('POST', `/leave/policies/${pol.body.id}/versions`, {
+    effectiveFrom: '2025-01-01', accrualMode: 'monthly',
+    accrualRateParam: 'conges.acquisition.taux_mensuel', rounding: 'half_up_0_5',
+  })).status, 201);
+  assert.equal((await call('POST', `/leave/policies/${pol.body.id}/status`, { status: 'active' })).status, 200);
+  // Acquisition T1 pour PW-0001 : 3 mouvements ; RELANCE : zéro écriture (clés UNIQUES en base).
+  const run1 = await call('POST', '/leave/accrual/run', {
+    periodStart: '2026-01-01', periodEnd: '2026-03-31', scopeKind: 'employee', scopeId: hr.e1, reason: 'acquisition T1 (navigateur)',
+  });
+  assert.equal(run1.status, 201, JSON.stringify(run1.body));
+  assert.equal(run1.body.run.entriesWritten, 3, 'janvier, février, mars');
+  const run2 = await call('POST', '/leave/accrual/run', {
+    periodStart: '2026-01-01', periodEnd: '2026-03-31', scopeKind: 'employee', scopeId: hr.e1, reason: 'relance idempotente (navigateur)',
+  });
+  assert.equal(run2.body.run.entriesWritten, 0, 'rejouer n’écrit RIEN');
+  assert.equal(run2.body.run.entriesSkipped, 3);
+
+  // 1. Administration : soldes + ledger + exécutions via l'UI.
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await ctx.newPage();
+  await shot(page, 'conges-admin', async () => {
+    await login(page, leaveAdmEmail);
+    await page.click('a[href="#/leave/balances"]');
+    await page.waitForSelector('tbody tr');
+    let body = await page.evaluate(() => document.body.textContent ?? '');
+    assert.ok(body.includes('PW-0001'), 'le salarié acquis apparaît');
+    assert.ok(body.includes('6 Jours ouvrés'), 'disponible = somme des mouvements (3 × 2 j)');
+    assert.ok(body.includes('Moteur d’acquisition'), 'le ledger append-only est visible (origine des mouvements)');
+    await page.click('a[href="#/leave/runs"]');
+    await page.waitForSelector('tbody tr');
+    body = await page.evaluate(() => document.body.textContent ?? '');
+    assert.ok(body.includes('relance idempotente (navigateur)'), 'l’historique des exécutions est là');
+    await page.click('a[href="#/leave/catalog"]');
+    await page.waitForFunction(() => (document.body.textContent ?? '').includes('POL-CAP'));
+    body = await page.evaluate(() => document.body.textContent ?? '');
+    assert.ok(body.includes('conges.acquisition.taux_mensuel'), 'le rythme AFFICHE sa clé E4 — aucun défaut du moteur');
+  });
+  await ctx.close();
+
+  // 2. ESS : « Mes soldes » + PROJECTION conditionnelle ; HORS LIGNE, rien ne survit.
+  const ctx2 = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page2 = await ctx2.newPage();
+  await shot(page2, 'conges-ess', async () => {
+    await login(page2, essEmail);
+    await page2.click('a[href="#/leave/mine"]');
+    await page2.waitForSelector('tbody tr');
+    let body2 = await page2.evaluate(() => document.body.textContent ?? '');
+    assert.ok(body2.includes('Congé annuel payé'), 'mes soldes affichent le type');
+    // Projection au 31 décembre : disponible + acquisitions futures, clairement qualifiée.
+    await page2.click('button:has-text("Projeter")');
+    await page2.waitForFunction(() => (document.body.textContent ?? '').includes('Projection conditionnelle'));
+    body2 = await page2.evaluate(() => document.body.textContent ?? '');
+    assert.ok(body2.includes('Projeté au'), 'le solde projeté est DISTINGUÉ du disponible');
+    // HORS LIGNE : aucune donnée individuelle de congé ne survit.
+    await ctx2.setOffline(true);
+    await page2.reload({ waitUntil: 'domcontentloaded' });
+    await page2.waitForSelector('#app');
+    const report = await storageReport(page2);
+    assert.deepEqual(report.cacheApiEntries, [], 'AUCUNE réponse /api en Cache Storage');
+    assert.deepEqual(report.sessionStorageKeys, [], 'sessionStorage vide');
+    assert.ok(!report.bodyText.includes('Congé annuel payé'), 'aucun solde lisible hors ligne');
+    assert.ok(!report.bodyText.includes('PW-0001'), 'aucun matricule lisible hors ligne');
+    const offline = await page2.evaluate(async () => {
+      try {
+        const r = await fetch('/api/v1/leave/balances/mine');
+        return `status:${r.status}`;
+      } catch {
+        return 'network-error';
+      }
+    });
+    assert.equal(offline, 'network-error', 'les soldes ne répondent JAMAIS depuis un cache');
+    await ctx2.setOffline(false);
+  });
+  await ctx2.close();
+});
+
+test('CONGÉS (E11.1) : RBAC — sans permission, ni menus, ni écrans, ni API', { skip: !RUNNABLE }, async () => {
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await ctx.newPage();
+  await shot(page, 'conges-rbac', async () => {
+    await login(page, viewerEmail); // employees.view SEUL
+    for (const href of ['#/leave/mine', '#/leave/balances', '#/leave/catalog', '#/leave/runs']) {
+      const has = await page.evaluate((s) => document.querySelector(`a[href="${s}"]`) !== null, href);
+      assert.equal(has, false, `menu ${href} absent sans permission`);
+    }
+    await page.goto(`${BASE}/#/leave/balances`);
+    await page.waitForFunction(() =>
+      (document.body.textContent ?? '').includes('Accès refusé')
+      || (document.body.textContent ?? '').includes('Access denied'));
+    // Le MASQUAGE n'est pas la sécurité : le serveur refuse les appels directs.
+    const statuses = await page.evaluate(async () => ({
+      balances: (await fetch('/api/v1/leave/balances')).status,
+      mine: (await fetch('/api/v1/leave/balances/mine')).status,
+      types: (await fetch('/api/v1/leave/types')).status,
+      ledger: (await fetch('/api/v1/leave/ledger')).status,
+    }));
+    assert.equal(statuses.balances, 403, 'soldes : 403 sans permission');
+    assert.equal(statuses.mine, 403, 'mes soldes : 403 sans leave.balance_view_own');
+    assert.equal(statuses.types, 403, 'référentiel : 403 sans permission congés');
+    assert.equal(statuses.ledger, 403, 'ledger : 403 sans permission');
   });
   await ctx.close();
 });
