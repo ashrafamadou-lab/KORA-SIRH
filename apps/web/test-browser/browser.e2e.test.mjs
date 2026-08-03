@@ -892,16 +892,18 @@ test('CONGÉS (E11.1) : acquisition IDEMPOTENTE par l’API, soldes/ledger/Mes s
   const page = await ctx.newPage();
   await shot(page, 'conges-admin', async () => {
     await login(page, leaveAdmEmail);
+    // Les attentes visent un TEXTE propre à la page cible : un sélecteur générique
+    // (tbody tr) serait satisfait par le tableau de la page PRÉCÉDENTE pendant que
+    // le routeur bascule (course constatée au run CI 30820501899).
     await page.click('a[href="#/leave/balances"]');
-    await page.waitForSelector('tbody tr');
+    await page.waitForFunction(() => (document.body.textContent ?? '').includes('PW-0001'));
     let body = await page.evaluate(() => document.body.textContent ?? '');
-    assert.ok(body.includes('PW-0001'), 'le salarié acquis apparaît');
     assert.ok(body.includes('6 Jours ouvrés'), 'disponible = somme des mouvements (3 × 2 j)');
     assert.ok(body.includes('Moteur d’acquisition'), 'le ledger append-only est visible (origine des mouvements)');
     await page.click('a[href="#/leave/runs"]');
-    await page.waitForSelector('tbody tr');
+    await page.waitForFunction(() => (document.body.textContent ?? '').includes('relance idempotente (navigateur)'));
     body = await page.evaluate(() => document.body.textContent ?? '');
-    assert.ok(body.includes('relance idempotente (navigateur)'), 'l’historique des exécutions est là');
+    assert.ok(body.includes('acquisition T1 (navigateur)'), 'l’historique des exécutions est complet');
     await page.click('a[href="#/leave/catalog"]');
     await page.waitForFunction(() => (document.body.textContent ?? '').includes('POL-CAP'));
     body = await page.evaluate(() => document.body.textContent ?? '');
