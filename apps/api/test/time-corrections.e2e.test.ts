@@ -353,7 +353,9 @@ test('05 approbation manager → RH ⇒ surcouche append-only + NOUVELLE version
   // L'anomalie liée est résolue par RÉFÉRENCE PROBANTE (l'événement correctif).
   const anom = psql(`SELECT state || '|' || resolution_kind || '|' || (resolution_event_id IS NOT NULL)
     FROM time.day_anomalies WHERE id = '${anomMissingOutId}'`);
-  assert.equal(anom, 'resolved|correction_applied|t');
+  // Concaténé via ||, un booléen PostgreSQL se rend 'true'/'false' (le 't' court
+  // n'est que l'affichage psql d'une COLONNE booléenne) — constaté au run 30805563415.
+  assert.equal(anom, 'resolved|correction_applied|true');
   // BRUTS et événements normalisés STRICTEMENT inchangés.
   const fp = fingerprints();
   assert.equal(fp.raw, rawFp, 'raw_punches intacts après correction');
@@ -639,7 +641,12 @@ test('19 décisions CONCURRENTES : verrou d\'instance — une transition, jamais
     api(`/time/corrections/${reqA}/decide`, mgr, { action: 'approve' }),
     api(`/time/corrections/${reqA}/decide`, mgr, { action: 'approve' }),
   ]);
-  assert.deepEqual([a1.status, a2.status].sort((x, y) => x - y), [200, 409], 'double approbation : UNE transition');
+  // L'INVARIANT est : UNE transition. Le perdant est refusé — 403 si l'étape a
+  // déjà avancé (il n'est plus l'approbateur du pas courant), 409 si l'instance
+  // a fini entre-temps ; les deux prouvent le verrou (constaté au run 30805563415).
+  const codesA = [a1.status, a2.status];
+  assert.equal(codesA.filter((c) => c === 200).length, 1, `double approbation : UNE transition (${codesA.join(',')})`);
+  assert.ok(codesA.some((c) => c === 403 || c === 409), `le perdant est refusé (${codesA.join(',')})`);
   const reqB = await created('/time/corrections', self, {
     workDate: FRI, kind: 'justify_early_departure', motive: 'concurrence B', payload: { category: 'autorisation' },
   });
@@ -648,7 +655,9 @@ test('19 décisions CONCURRENTES : verrou d\'instance — une transition, jamais
     api(`/time/corrections/${reqB}/decide`, mgr, { action: 'approve' }),
     api(`/time/corrections/${reqB}/decide`, mgr, { action: 'reject' }),
   ]);
-  assert.deepEqual([b1.status, b2.status].sort((x, y) => x - y), [200, 409], 'approbation et rejet simultanés : un seul gagne');
+  const codesB = [b1.status, b2.status];
+  assert.equal(codesB.filter((c) => c === 200).length, 1, `approbation et rejet simultanés : un seul gagne (${codesB.join(',')})`);
+  assert.ok(codesB.some((c) => c === 403 || c === 409), `le perdant est refusé (${codesB.join(',')})`);
   // La décision d'une demande n'a JAMAIS touché l'autre (liaison sujet ↔ instance).
   const stA = psql(`SELECT status FROM time.correction_requests WHERE id = '${reqA}'`);
   const stB = psql(`SELECT status FROM time.correction_requests WHERE id = '${reqB}'`);

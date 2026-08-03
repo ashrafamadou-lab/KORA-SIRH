@@ -471,6 +471,26 @@ export class CorrectionsService {
       if (existing.length > 0) {
         eventId = existing[0]!.id; // application rejouée : l'événement EXISTE déjà, rien de neuf
       } else {
+        // Pré-contrôle du VERROU de période (même logique que le trigger, qui reste
+        // le filet ultime) : détecter AVANT d'insérer évite de poursuivre dans une
+        // transaction avortée — le constat d'échec s'écrira dans une transaction neuve.
+        const lock = await tx.$queryRaw<Array<{ status: string }>>`
+          SELECT p.status FROM time.periods p
+           WHERE p.status IN ('locked', 'closed', 'archived')
+             AND ${req.work_date}::date BETWEEN p.period_start AND p.period_end
+             AND (p.scope_kind = 'tenant'
+               OR EXISTS (SELECT 1 FROM core.employee_assignments a
+                           WHERE a.employee_id = ${req.employee_id}::uuid AND a.is_primary
+                             AND daterange(a.effective_from, a.effective_to, '[)') @> ${req.work_date}::date
+                             AND ((p.scope_kind = 'company' AND a.company_id = p.company_id)
+                               OR (p.scope_kind = 'site'    AND a.site_id    = p.site_id))))
+           LIMIT 1`;
+        if (lock.length > 0) {
+          return {
+            kind: 'period_locked' as const,
+            message: `période ${lock[0]!.status} : écriture refusée sur la journée ${req.work_date} (réouverture contrôlée requise)`,
+          };
+        }
         try {
           const ins = await tx.$queryRaw<Array<{ id: string }>>`
             INSERT INTO time.correction_events (tenant_id, request_id, employee_id, work_date, kind, effect, created_by)
@@ -481,17 +501,10 @@ export class CorrectionsService {
         } catch (e) {
           const msg = (e as Error).message;
           if (msg.includes('période') || msg.includes('verrouillée')) {
-            // Période close : l'application ÉCHOUE explicitement — réouverture requise.
-            await tx.$executeRaw`
-              UPDATE time.correction_requests SET status = 'application_failed',
-                     application_error = ${msg.split('\n')[0]!.slice(0, 490)}
-               WHERE id = ${requestId}::uuid AND status IN ('approved')`;
-            await auditAuth(tx, tenantId, {
-              action: 'time_correction_application_failed', actorUserId: actor, module: 'time',
-              recordType: 'correction_request', recordId: requestId,
-              newValue: { error: 'période verrouillée/clôturée' }, result: 'failure',
-            });
-            return { kind: 'conflict' as const, reason: 'période verrouillée ou clôturée : réouverture contrôlée requise avant application' };
+            // Période close : le TRIGGER a rejeté l'INSERT et la transaction est
+            // AVORTÉE (25P02) — plus AUCUNE requête ici (leçon CI 30805563415) :
+            // le constat d'échec s'écrit dans une transaction NEUVE, après.
+            return { kind: 'period_locked' as const, message: msg.split('\n')[0]!.slice(0, 490) };
           }
           throw e;
         }
@@ -512,6 +525,28 @@ export class CorrectionsService {
       };
     });
     if (step1.kind === 'already') return { kind: 'ok', eventId: step1.eventId, runId: null };
+    if (step1.kind === 'period_locked') {
+      // Constat d'échec dans une transaction SAINE : état explicite, audit, notification.
+      await this.prisma.withTenant(tenantId, async (tx) => {
+        await tx.$executeRaw`
+          UPDATE time.correction_requests SET status = 'application_failed',
+                 application_error = ${step1.message}
+           WHERE id = ${requestId}::uuid AND status IN ('approved', 'application_failed')`;
+        const who = await tx.$queryRaw<Array<{ requester_user_id: string }>>`
+          SELECT requester_user_id FROM time.correction_requests WHERE id = ${requestId}::uuid`;
+        if (who[0]) {
+          await this.notifyUsers(tx, tenantId, actor, [who[0].requester_user_id],
+            `temps-correction-echec-${requestId}`, 'temps_correction_echec_application',
+            { demande: requestId, erreur: 'période verrouillée ou clôturée' });
+        }
+        await auditAuth(tx, tenantId, {
+          action: 'time_correction_application_failed', actorUserId: actor, module: 'time',
+          recordType: 'correction_request', recordId: requestId,
+          newValue: { error: 'période verrouillée/clôturée' }, result: 'failure',
+        });
+      });
+      return { kind: 'conflict', reason: 'période verrouillée ou clôturée : réouverture contrôlée requise avant application' };
+    }
     if (step1.kind !== 'ok') return step1;
 
     // 2. Recalcul E10.2 MOTIVÉ (machinerie standard : versions, historique, audit).
