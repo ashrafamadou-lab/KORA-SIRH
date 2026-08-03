@@ -64,7 +64,10 @@ const routesDemo = {
       'time.schedules_view', 'time.schedules_manage', 'time.schedules_assign', 'time.punches_import',
       'time.punches_view', 'time.punches_view_errors', 'time.punches_view_own', 'time.devices_manage',
       'time.results_view', 'time.results_view_own', 'time.anomalies_view', 'time.anomalies_manage',
-      'time.calc_run', 'time.calc_recalc', 'time.calc_view'],
+      'time.calc_run', 'time.calc_recalc', 'time.calc_view',
+      'time.correction_request_self', 'time.correction_request', 'time.correction_view', 'time.correction_admin',
+      'time.attachments_view', 'time.preclose_view', 'time.period_manage', 'time.period_close',
+      'time.period_reopen', 'time.payroll_view', 'time.payroll_export', 'time.rules_admin'],
     scopes: [{ type: 'tenant', ref: null }], roles: [{ key: 'rh-admin', name: 'Administrateur RH' }],
     locale: 'fr', mfaEnabled: true, tenant: T,
   }),
@@ -286,6 +289,100 @@ const routesDemo = {
   }),
   'POST /time/calc/run': () => ({ run: { id: uid(700), periodStart: '2026-07-01', periodEnd: '2026-07-31', scopeKind: 'tenant', reason: 'démo', isRecalc: false, engineVersion: 'kora-presence-1.0.0', status: 'completed', startedAt: '2026-08-01T06:00:00Z', finishedAt: '2026-08-01T06:00:04Z', employeesCount: 27, daysCount: 31, resultsWritten: 792, resultsUnchanged: 45, resultsError: 0, anomaliesCount: 23, durationMs: 4210 } }),
   'POST /time/calc/recalc': () => ({ run: { id: uid(701), periodStart: '2026-07-31', periodEnd: '2026-07-31', scopeKind: 'employee', reason: 'démo', isRecalc: true, engineVersion: 'kora-presence-1.0.0', status: 'completed', startedAt: '2026-08-01T06:30:00Z', finishedAt: '2026-08-01T06:30:01Z', employeesCount: 1, daysCount: 1, resultsWritten: 1, resultsUnchanged: 0, resultsError: 0, anomaliesCount: 1, durationMs: 320 } }),
+  // ---------- Corrections & clôture (E10.3) — données de DÉMONSTRATION ----------
+  'GET /time/corrections/mine': () => ({ items: [DEMO_CORR[0], DEMO_CORR[3]] }),
+  'GET /time/corrections': (q) => {
+    let items = DEMO_CORR;
+    if (q.get('status')) items = items.filter((r) => r.status === q.get('status'));
+    if (q.get('kind')) items = items.filter((r) => r.kind === q.get('kind'));
+    return { items };
+  },
+  'POST /time/corrections': () => ({ id: uid(760) }),
+  [`POST /time/corrections/${uid(760)}/submit`]: () => ({ version: 1 }),
+  [`POST /time/corrections/${uid(760)}/attachments`]: () => ({ id: uid(765) }),
+  [`GET /time/corrections/${uid(750)}`]: () => ({
+    request: DEMO_CORR[0],
+    attachments: [{ id: uid(766), filename: 'justificatif-transport.pdf', mime: 'application/pdf', byteSize: 182_331, sensitive: false, avStatus: 'clean', createdAt: '2026-07-31T10:05:00Z' }],
+  }),
+  [`POST /time/corrections/${uid(751)}/decide`]: () => ({ status: 'applied', applied: true, applicationError: null }),
+  [`POST /time/corrections/${uid(751)}/apply`]: () => ({ status: 'applied' }),
+  'GET /time/periods': () => ({ items: [
+    { id: uid(740), scopeKind: 'tenant', companyId: null, siteId: null, label: 'PAIE-2026-07', periodStart: '2026-07-01', periodEnd: '2026-07-31', status: 'closed', revision: 1, createdAt: '2026-07-01T06:00:00Z', closeCount: 1, activeCloseNo: 1 },
+    { id: uid(741), scopeKind: 'tenant', companyId: null, siteId: null, label: 'PAIE-2026-08', periodStart: '2026-08-01', periodEnd: '2026-08-31', status: 'open', revision: 1, createdAt: '2026-08-01T06:00:00Z', closeCount: 0, activeCloseNo: null },
+  ] }),
+  'POST /time/periods': () => ({ id: uid(742) }),
+  [`POST /time/periods/${uid(741)}/status`]: () => ({ status: 'in_review' }),
+  [`GET /time/periods/${uid(741)}/preclose`]: () => ({
+    period: { id: uid(741), label: 'PAIE-2026-08', status: 'in_review', revision: 1, periodStart: '2026-08-01', periodEnd: '2026-08-31' },
+    controls: [
+      { key: 'expected_employees', count: 6, blocking: false },
+      { key: 'employees_with_results', count: 6, blocking: false },
+      { key: 'missing_employees', count: 0, blocking: true },
+      { key: 'open_anomalies', count: 2, blocking: false },
+      { key: 'blocking_anomalies', count: 1, blocking: true },
+      { key: 'pending_requests', count: 1, blocking: true },
+      { key: 'approved_unapplied', count: 0, blocking: true },
+      { key: 'failed_days', count: 0, blocking: true },
+      { key: 'no_schedule_employees', count: 0, blocking: false },
+      { key: 'no_assignment_employees', count: 0, blocking: false },
+      { key: 'overtime_candidate_minutes', count: 160, blocking: false },
+      { key: 'worked_rest_holiday_days', count: 1, blocking: false },
+      { key: 'engine_divergence', count: 0, blocking: false },
+      { key: 'stale_after_correction', count: 0, blocking: true },
+    ],
+    blockers: 2, warnings: 4, closable: false,
+  }),
+  [`GET /time/periods/${uid(740)}/preclose`]: () => ({
+    period: { id: uid(740), label: 'PAIE-2026-07', status: 'closed', revision: 1, periodStart: '2026-07-01', periodEnd: '2026-07-31' },
+    controls: [
+      { key: 'expected_employees', count: 6, blocking: false },
+      { key: 'employees_with_results', count: 6, blocking: false },
+      { key: 'missing_employees', count: 0, blocking: true },
+      { key: 'open_anomalies', count: 0, blocking: false },
+      { key: 'blocking_anomalies', count: 0, blocking: true },
+      { key: 'pending_requests', count: 0, blocking: true },
+      { key: 'approved_unapplied', count: 0, blocking: true },
+      { key: 'failed_days', count: 0, blocking: true },
+      { key: 'overtime_candidate_minutes', count: 165, blocking: false },
+    ],
+    blockers: 0, warnings: 1, closable: true,
+  }),
+  [`POST /time/periods/${uid(740)}/close`]: () => ({ close: DEMO_CLOSE }),
+  [`POST /time/periods/${uid(740)}/reopen`]: () => ({ status: 'pending_workflow' }),
+  [`GET /time/periods/${uid(740)}/closes`]: () => ({ items: [DEMO_CLOSE] }),
+  [`GET /time/closes/${uid(770)}/payroll`]: () => ({ rows: [
+    { employeeId: uid(100), matricule: 'SBT-0001', firstName: 'Awa', lastName: 'Sossou', expectedDays: 22, presentDays: 21, unjustifiedAbsenceDays: 0, justified: { maladie: { days: 1, minutes: 480 } }, lateMinutes: 42, earlyDepartureMinutes: 0, workedMinutes: 10_120, nightMinutes: 9_600, restDayMinutes: 0, holidayMinutes: 480, overtimeCandidateMinutes: 160, correctionsApplied: 1 },
+    { employeeId: uid(101), matricule: 'SBT-0002', firstName: 'Bio', lastName: 'Kassim', expectedDays: 22, presentDays: 22, unjustifiedAbsenceDays: 0, justified: {}, lateMinutes: 0, earlyDepartureMinutes: 12, workedMinutes: 10_560, nightMinutes: 0, restDayMinutes: 480, holidayMinutes: 0, overtimeCandidateMinutes: 45, correctionsApplied: 1 },
+    { employeeId: uid(102), matricule: 'SBT-0003', firstName: 'Chantal', lastName: 'Dossou', expectedDays: 22, presentDays: 20, unjustifiedAbsenceDays: 2, justified: {}, lateMinutes: 15, earlyDepartureMinutes: 0, workedMinutes: 9_610, nightMinutes: 0, restDayMinutes: 0, holidayMinutes: 0, overtimeCandidateMinutes: 0, correctionsApplied: 0 },
+  ] }),
+  [`GET /time/closes/${uid(770)}/verify`]: () => ({ match: true, datasetSha256: 'c'.repeat(64) }),
+  [`GET /time/closes/${uid(770)}/exports`]: () => ({ items: [
+    { id: uid(780), schemaVersion: 'kora-paie-prep-1', format: 'csv', revision: 1, sha256: 'd'.repeat(64), employeesCount: 6, status: 'active', generatedBy: 'demo.rh@sbt.bj', generatedAt: '2026-08-02T09:00:00Z', byteSize: 2_048 },
+    { id: uid(781), schemaVersion: 'kora-paie-prep-1', format: 'json', revision: 1, sha256: 'e'.repeat(64), employeesCount: 6, status: 'superseded', generatedBy: 'demo.rh@sbt.bj', generatedAt: '2026-08-01T18:00:00Z', byteSize: 5_120 },
+  ] }),
+  [`POST /time/closes/${uid(770)}/exports`]: () => ({ export: { id: uid(780), revision: 1 }, reused: true }),
+  [`GET /time/payroll-exports/${uid(780)}/download`]: () => ({
+    filename: 'kora-paie-PAIE-2026-07-c1-r1.csv', mime: 'text/csv',
+    contentBase64: Buffer.from('matricule;jours_attendus;jours_presents;minutes_travaillees\nSBT-0001;22;21;10120\n').toString('base64'),
+  }),
+};
+
+/** Demandes de correction de DÉMONSTRATION (E10.3) — la surcouche ne remplace jamais le brut. */
+const DEMO_CORR = [
+  { id: uid(750), employeeId: uid(100), workDate: '2026-07-30', kind: 'justify_late', origin: 'self', status: 'applied', version: 1, requesterUserId: uid(500), motive: 'Panne de transport en commun, justificatif joint.', payload: { category: 'transport' }, beforeSnapshot: { lateMinutes: 12 }, afterSnapshot: { lateMinutes: 12, lateJustified: true }, anomalyId: null, workflowInstanceId: uid(62), appliedEventId: uid(790), applicationError: null, submittedAt: '2026-07-31T08:00:00Z', decidedAt: '2026-07-31T14:00:00Z', appliedAt: '2026-07-31T14:00:02Z', createdAt: '2026-07-31T07:55:00Z', matricule: 'SBT-0001', firstName: 'Awa', lastName: 'Sossou', attachmentCount: 1 },
+  { id: uid(751), employeeId: uid(102), workDate: '2026-07-31', kind: 'add_out', origin: 'manager', status: 'submitted', version: 1, requesterUserId: uid(501), motive: 'Sortie non badgée (oubli constaté par le chef d’équipe).', payload: { localTime: '17:05', sourceNote: 'déclaré par le manager' }, beforeSnapshot: null, afterSnapshot: null, anomalyId: uid(730), workflowInstanceId: uid(64), appliedEventId: null, applicationError: null, submittedAt: '2026-08-01T09:00:00Z', decidedAt: null, appliedAt: null, createdAt: '2026-08-01T08:58:00Z', matricule: 'SBT-0003', firstName: 'Chantal', lastName: 'Dossou', attachmentCount: 0 },
+  { id: uid(752), employeeId: uid(105), workDate: '2026-07-31', kind: 'exclude_event', origin: 'auto_anomaly', status: 'rejected', version: 1, requesterUserId: uid(500), motive: 'Pointages pendant suspension — à exclure après contrôle.', payload: { eventId: uid(682) }, beforeSnapshot: null, afterSnapshot: null, anomalyId: uid(731), workflowInstanceId: null, appliedEventId: null, applicationError: null, submittedAt: '2026-08-01T07:00:00Z', decidedAt: '2026-08-01T11:00:00Z', appliedAt: null, createdAt: '2026-08-01T06:30:05Z', matricule: 'SBT-0006', firstName: 'Faustin', lastName: 'Zinsou', attachmentCount: 0 },
+  { id: uid(753), employeeId: uid(100), workDate: '2026-07-29', kind: 'justify_absence', origin: 'self', status: 'draft', version: 1, requesterUserId: uid(500), motive: 'Absence pour obligation familiale (brouillon).', payload: { category: 'familial' }, beforeSnapshot: null, afterSnapshot: null, anomalyId: null, workflowInstanceId: null, appliedEventId: null, applicationError: null, submittedAt: null, decidedAt: null, appliedAt: null, createdAt: '2026-08-01T10:00:00Z', matricule: 'SBT-0001', firstName: 'Awa', lastName: 'Sossou', attachmentCount: 0 },
+];
+
+/** Clôture de DÉMONSTRATION : versions retenues figées + empreinte reproductible. */
+const DEMO_CLOSE = {
+  id: uid(770), closeNo: 1, periodRevision: 1, engineVersion: 'kora-presence-1.1.0',
+  datasetSha256: 'c'.repeat(64), employeesCount: 6, daysCount: 31, resultsCount: 186,
+  totals: { expected_days: 132, present_days: 127, worked_minutes: 60_480, night_minutes: 9_600, overtime_candidate_minutes: 365 },
+  warnings: [{ key: 'open_anomalies', count: 2 }], status: 'active',
+  closedBy: 'demo.rh@sbt.bj', closedAt: '2026-08-02T08:30:00Z', exportCount: 2,
+  periodLabel: 'PAIE-2026-07', periodStart: '2026-07-01', periodEnd: '2026-07-31', periodStatus: 'closed',
 };
 
 /** Résultat journalier de DÉMONSTRATION — valeurs par défaut sûres, surchargées au besoin. */

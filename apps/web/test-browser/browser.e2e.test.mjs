@@ -54,6 +54,10 @@ const mfaEmail = `pwa.mfa.${rid}@demo.bj`;
 // identité — comportement de PRODUCTION, jamais assoupli pour les tests) est sinon
 // atteint par l'accumulation des connexions admin de la suite (CI run 30714332862).
 const timeAdmEmail = `pwa.tadm.${rid}@demo.bj`;
+// Compte ESS (E10.3) : relié au dossier salarié PW-0001, il ne porte QUE la
+// permission de demander pour LUI-MÊME — la séparation demandeur/approbateur
+// sera prouvée par le SERVEUR, pas par le masquage des boutons.
+const essEmail = `pwa.ess.${rid}@demo.bj`;
 
 let app = null;
 let webServer = null;
@@ -169,9 +173,16 @@ before(async (tc) => {
     'time.schedules_view', 'time.punches_import', 'time.punches_view', 'time.punches_view_errors', 'time.devices_manage',
     // E10.2 : déclenchement du moteur + consultation des résultats et anomalies.
     'time.schedules_manage', 'time.schedules_assign', 'time.calc_run', 'time.calc_view',
-    'time.results_view', 'time.anomalies_view', 'time.anomalies_manage']);
+    'time.results_view', 'time.anomalies_view', 'time.anomalies_manage',
+    // E10.3 : circuit (configuration), file des demandes, périodes, clôture, paie.
+    'workflow.manage', 'time.correction_view', 'time.correction_admin', 'time.attachments_view',
+    'time.preclose_view', 'time.period_manage', 'time.period_close', 'time.period_reopen',
+    'time.payroll_view', 'time.payroll_export']);
   await seedUser(mfaEmail, ['employees.view']);
+  const essUserId = await seedUser(essEmail, ['time.correction_request_self']);
   hr = seedHr();
+  // Lien compte ↔ dossier salarié : la demande « pour soi » ne vise QUE ce dossier.
+  psql(`UPDATE core.employees SET user_id = '${essUserId}' WHERE id = '${hr.e1}'`);
 
   const require2 = createRequire(join(here, 'browser.e2e.test.mjs'));
   const mainModule = require2(API_DIST);
@@ -617,6 +628,208 @@ test('TEMPS (E10.2) : RBAC — sans permission, ni registre, ni calcul (le serve
     assert.equal(runDirect, 403, 'API calcul : 403 sans permission');
     const anomDirect = await page.evaluate(async () => (await fetch('/api/v1/time/anomalies')).status);
     assert.equal(anomDirect, 403, 'API anomalies : 403 sans permission');
+  });
+  await ctx.close();
+});
+
+test('TEMPS (E10.3) : demande ESS via l’UI, décision SÉPARÉE, clôture, variables de paie SANS montant, HORS LIGNE rien ne survit', { skip: !RUNNABLE }, async () => {
+  // 1. Circuit d'approbation E3 — CONFIGURATION du tenant (jamais du code) : un
+  // pas, approbateur = rôle du gestionnaire temps. Séparation native : le
+  // demandeur ne peut PAS approuver sa propre demande.
+  const apiBase = `http://127.0.0.1:${API_PORT}/api/v1`;
+  const bearer = async (email) => {
+    const r = await fetch(`${apiBase}/auth/login`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tenantSlug: slug, email, password: P }),
+    });
+    return (await r.json()).token;
+  };
+  const call = async (token, method, path, body) => {
+    const r = await fetch(`${apiBase}${path}`, {
+      method, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const text = await r.text();
+    return { status: r.status, body: text ? JSON.parse(text) : {} };
+  };
+  const adm = await bearer(timeAdmEmail);
+  const def = await call(adm, 'POST', '/workflow/definitions', {
+    key: 'temps_correction', name: 'Correction de présence',
+    steps: [{ index: 0, name: 'Administration du temps', approverType: 'role', approverRef: `r-pwa.tadm.${rid}` }],
+  });
+  assert.equal(def.status, 201, JSON.stringify(def.body));
+  assert.equal((await call(adm, 'POST', `/workflow/definitions/${def.body.id}/activate`)).status, 200);
+  // Empreinte du BRUT avant toute correction — il devra être inchangé au bit près.
+  const rawDigest = () => psql(`SELECT count(*) || ':' || coalesce(md5(string_agg(fingerprint, ',' ORDER BY fingerprint)), '-')
+    FROM time.raw_punches WHERE tenant_id = '${tenantId}'`);
+  const rawBefore = rawDigest();
+
+  // 2. ESS : déclarer un retard justifié via l'UI (2 min de retard le 2026-07-01).
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await ctx.newPage();
+  await shot(page, 'e103-ess', async () => {
+    await login(page, essEmail);
+    const nav = await page.evaluate(() => ({
+      mine: document.querySelector('a[href="#/time/requests-mine"]') !== null,
+      queue: document.querySelector('a[href="#/time/requests"]') !== null,
+      periods: document.querySelector('a[href="#/time/periods"]') !== null,
+    }));
+    assert.equal(nav.mine, true, 'l’ESS voit « Mes demandes »');
+    assert.equal(nav.queue, false, 'l’ESS ne voit PAS la file de décision');
+    assert.equal(nav.periods, false, 'l’ESS ne voit PAS les périodes');
+    await page.click('a[href="#/time/requests-mine"]');
+    await page.waitForSelector('form select');
+    await page.selectOption('form select', 'justify_late');
+    await page.fill('input[type="date"]', '2026-07-01');
+    await page.getByLabel('Motif').fill('Panne du bus interurbain — attestation du transporteur');
+    await page.getByLabel('Catégorie').fill('transport');
+    await page.click('form button[type="submit"]');
+    await page.waitForFunction(() => (document.body.textContent ?? '').includes('Soumise'));
+    const bodyEss = await page.evaluate(() => document.body.textContent ?? '');
+    assert.ok(bodyEss.includes('v1'), 'la version soumise (v1) est visible — la décision portera sur ELLE');
+    assert.ok(!bodyEss.includes('Approuver'), 'aucun bouton de décision côté ESS (et le serveur tranche)');
+  });
+  await ctx.close();
+
+  // 3. Séparation demandeur/approbateur PROUVÉE PAR LE SERVEUR : l'ESS tente
+  // d'approuver et d'appliquer SA demande — refus, même en appel direct.
+  const ess = await bearer(essEmail);
+  const mine = await call(ess, 'GET', '/time/corrections/mine');
+  assert.equal(mine.status, 200);
+  const reqId = mine.body.items[0].id;
+  assert.equal(mine.body.items[0].status, 'submitted');
+  assert.equal((await call(ess, 'POST', `/time/corrections/${reqId}/decide`, { action: 'approve' })).status, 403,
+    'auto-approbation IMPOSSIBLE : le demandeur n’est jamais son approbateur');
+  assert.equal((await call(ess, 'POST', `/time/corrections/${reqId}/apply`)).status, 403,
+    'application réservée à l’administration du temps');
+
+  // 4. Gestionnaire temps : approbation via l'UI → application idempotente,
+  // NOUVELLE version calculée, l'ancienne DEMEURE, le brut ne bouge pas.
+  const ctx2 = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page2 = await ctx2.newPage();
+  await shot(page2, 'e103-decision-cloture', async () => {
+    await login(page2, timeAdmEmail);
+    await page2.click('a[href="#/time/requests"]');
+    await page2.waitForSelector('tbody tr');
+    const queueBody = await page2.evaluate(() => document.body.textContent ?? '');
+    assert.ok(queueBody.includes('Justifier un retard') && queueBody.includes('PW-0001'), 'la demande soumise est dans la file');
+    await page2.click('tbody button:has-text("Approuver")');
+    await page2.waitForFunction(() => (document.body.textContent ?? '').includes('Correction appliquée'));
+    assert.equal(rawDigest(), rawBefore, 'pointages BRUTS inchangés au bit près après application');
+    const hist = await page2.evaluate(async (empId) => {
+      const r = await fetch(`/api/v1/time/results/history?employeeId=${empId}&date=2026-07-01`);
+      return { status: r.status, body: await r.json() };
+    }, hr.e1);
+    assert.equal(hist.status, 200);
+    assert.equal(hist.body.versions.length, 2, 'ancienne version CONSERVÉE + nouvelle version courante');
+    const current = hist.body.versions.find((v) => v.isCurrent);
+    assert.equal(current.version, 2);
+    assert.equal(current.lateJustified, true, 'retard JUSTIFIÉ — aucune heure inventée, la mesure demeure');
+
+    // 5. Période → revue → verrou → PRÉ-CLÔTURE → CLÔTURE (avertissements confirmés, tracés).
+    await page2.click('a[href="#/time/periods"]');
+    await page2.waitForSelector('form input[type="date"]');
+    await page2.getByLabel('Libellé').fill('PAIE-2026-07');
+    await page2.locator('form input[type="date"]').nth(0).fill('2026-07-01');
+    await page2.locator('form input[type="date"]').nth(1).fill('2026-07-31');
+    await page2.click('form button[type="submit"]');
+    await page2.waitForSelector('tbody tr');
+    await page2.click('button:has-text("Passer en revue")');
+    await page2.waitForSelector('button:has-text("Verrouiller")');
+    await page2.click('button:has-text("Verrouiller")');
+    await page2.waitForFunction(() => (document.body.textContent ?? '').includes('Verrouillée'));
+    await page2.click('button:has-text("Contrôle de pré-clôture")');
+    await page2.waitForFunction(() => (document.body.textContent ?? '').includes('Salariés attendus'));
+    const preBody = await page2.evaluate(() => document.body.textContent ?? '');
+    assert.ok(preBody.includes('Demandes en attente'), 'le contrôle des demandes en attente est affiché');
+    await page2.check('input[type="checkbox"]');
+    await page2.click('button:has-text("Clôturer")');
+    await page2.waitForFunction(() => (document.body.textContent ?? '').includes('Clôturée'));
+
+    // 6. Préparation paie : variables TEMPS uniquement, empreinte vérifiée, export téléchargeable.
+    await page2.click('a[href="#/time/payroll"]');
+    await page2.waitForFunction(() => (document.body.textContent ?? '').includes('PW-0001'));
+    const payBody = await page2.evaluate(() => document.body.textContent ?? '');
+    for (const banned of ['FCFA', 'fcfa', 'XOF', 'salaire', 'Salaire']) {
+      assert.ok(!payBody.includes(banned), `préparation paie SANS montant : « ${banned} » absent de l'écran`);
+    }
+    // Les DONNÉES (tableaux de variables et d'exports) ne portent aucun montant —
+    // le texte d'aide, lui, a le droit de DIRE « aucun montant ».
+    const tablesText = await page2.evaluate(() =>
+      Array.from(document.querySelectorAll('table')).map((el) => el.textContent ?? '').join(' '));
+    for (const banned of ['montant', 'Montant', 'FCFA', 'XOF']) {
+      assert.ok(!tablesText.includes(banned), `variables de paie SANS montant : « ${banned} » absent des tableaux`);
+    }
+    assert.ok(payBody.includes('kora-presence-'), 'la version du moteur FIGÉE à la clôture est affichée');
+    await page2.click('button:has-text("empreinte")');
+    await page2.waitForFunction(() => (document.body.textContent ?? '').includes('Empreinte VÉRIFIÉE'));
+    await page2.click('button:has-text("Exporter CSV")');
+    await page2.waitForFunction(() => (document.body.textContent ?? '').includes('kora-paie-prep-1 · csv · r1'));
+
+    // 7. Idempotence de l'export PROUVÉE par l'API : même contenu ⇒ RÉUTILISÉ, pas de révision fantôme.
+    const periods = await call(adm, 'GET', '/time/periods');
+    const periodId = periods.body.items.find((p) => p.label === 'PAIE-2026-07').id;
+    const closes = await call(adm, 'GET', `/time/periods/${periodId}/closes`);
+    assert.equal(closes.body.items.length, 1);
+    const closeId = closes.body.items[0].id;
+    const again = await call(adm, 'POST', `/time/closes/${closeId}/exports`, { format: 'csv' });
+    assert.ok(again.status === 200 || again.status === 201, JSON.stringify(again.body));
+    assert.equal(again.body.reused, true, 'même contenu ⇒ export RÉUTILISÉ');
+    assert.equal(again.body.export.revision, 1);
+    const exports = await call(adm, 'GET', `/time/closes/${closeId}/exports`);
+    const dl = await call(adm, 'GET', `/time/payroll-exports/${exports.body.items[0].id}/download`);
+    assert.equal(dl.status, 200);
+    const csv = Buffer.from(dl.body.contentBase64, 'base64').toString('utf8');
+    assert.ok(csv.includes('matricule'), 'l’export contient les variables préparatoires');
+    for (const banned of ['salaire', 'montant', 'fcfa', 'taux_horaire']) {
+      assert.ok(!csv.toLowerCase().includes(banned), `export paie SANS montant : « ${banned} » absent du fichier`);
+    }
+
+    // 8. HORS LIGNE : AUCUNE donnée de correction, clôture ou paie ne survit.
+    await ctx2.setOffline(true);
+    await page2.reload({ waitUntil: 'domcontentloaded' });
+    await page2.waitForSelector('#app');
+    const report = await storageReport(page2);
+    assert.deepEqual(report.cacheApiEntries, [], 'AUCUNE réponse /api en Cache Storage');
+    assert.deepEqual(report.sessionStorageKeys, [], 'sessionStorage vide');
+    assert.ok(!report.bodyText.includes('PAIE-2026-07'), 'aucune période lisible hors ligne');
+    assert.ok(!report.bodyText.includes('PW-0001'), 'aucune variable de paie lisible hors ligne');
+    const offline = await page2.evaluate(async () => {
+      try {
+        const r = await fetch('/api/v1/time/corrections');
+        return `status:${r.status}`;
+      } catch {
+        return 'network-error';
+      }
+    });
+    assert.equal(offline, 'network-error', 'les corrections ne répondent JAMAIS depuis un cache');
+    await ctx2.setOffline(false);
+  });
+  await ctx2.close();
+});
+
+test('TEMPS (E10.3) : RBAC — sans permission, ni menus, ni écrans, ni API (corrections, périodes, paie)', { skip: !RUNNABLE }, async () => {
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await ctx.newPage();
+  await shot(page, 'e103-rbac', async () => {
+    await login(page, viewerEmail); // employees.view SEUL
+    for (const href of ['#/time/requests-mine', '#/time/requests', '#/time/periods', '#/time/payroll']) {
+      const has = await page.evaluate((s) => document.querySelector(`a[href="${s}"]`) !== null, href);
+      assert.equal(has, false, `menu ${href} absent sans permission`);
+    }
+    await page.goto(`${BASE}/#/time/periods`);
+    await page.waitForFunction(() =>
+      (document.body.textContent ?? '').includes('Accès refusé')
+      || (document.body.textContent ?? '').includes('Access denied'));
+    // Le MASQUAGE n'est pas la sécurité : les appels directs sont refusés par le SERVEUR.
+    const statuses = await page.evaluate(async () => ({
+      corrections: (await fetch('/api/v1/time/corrections')).status,
+      mine: (await fetch('/api/v1/time/corrections/mine')).status,
+      periods: (await fetch('/api/v1/time/periods')).status,
+    }));
+    assert.equal(statuses.corrections, 403, 'file des demandes : 403 sans permission');
+    assert.equal(statuses.mine, 403, 'demandes « pour soi » : 403 sans time.correction_request_self');
+    assert.equal(statuses.periods, 403, 'périodes : 403 sans permission');
   });
   await ctx.close();
 });

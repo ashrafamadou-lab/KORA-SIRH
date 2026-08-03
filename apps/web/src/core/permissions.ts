@@ -58,6 +58,10 @@ export const NAV_MAP: NavSection[] = [
       { route: '/time/anomalies', labelKey: 'nav.timeAnomalies', anyOf: ['time.anomalies_view', 'time.anomalies_manage'], icon: 'alert' },
       { route: '/time/runs', labelKey: 'nav.timeRuns', anyOf: ['time.calc_view', 'time.calc_run', 'time.calc_recalc'], icon: 'layers' },
       { route: '/time/presence', labelKey: 'nav.timeMyPresence', anyOf: ['time.results_view_own'], icon: 'stamp' },
+      { route: '/time/requests-mine', labelKey: 'nav.timeMyRequests', anyOf: ['time.correction_request_self'], icon: 'stamp' },
+      { route: '/time/requests', labelKey: 'nav.timeRequests', anyOf: ['time.correction_view', 'time.correction_admin'], icon: 'tasks' },
+      { route: '/time/periods', labelKey: 'nav.timePeriods', anyOf: ['time.period_manage', 'time.preclose_view', 'time.period_close', 'time.period_reopen'], icon: 'calendar' },
+      { route: '/time/payroll', labelKey: 'nav.timePayroll', anyOf: ['time.payroll_view', 'time.payroll_export'], icon: 'layers' },
     ],
   },
   {

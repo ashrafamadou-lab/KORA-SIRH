@@ -242,19 +242,36 @@ export class CalcController {
     }));
   }
 
-  /** Prise en charge / écartement — « resolved » = circuit de correction E10.3 (409).
-   * PAS de garde déclarative ici : elle exigerait la portée TENANT (v1) et exclurait
-   * les responsables à portée fine — le SERVICE exige time.anomalies_manage ET borne
-   * l'action à la portée réelle (CI run 30757393308 : chef d'unité 403 au lieu de 404). */
+  /** Prise en charge / écartement / classement motivé — la résolution par CORRECTION
+   * est automatique (application approuvée) ; le classement exige resolutionKind +
+   * note (référence probante, trigger). PAS de garde déclarative : elle exigerait la
+   * portée TENANT (v1) et exclurait les responsables à portée fine — le SERVICE exige
+   * time.anomalies_manage ET borne l'action (CI run 30757393308 : 403 au lieu de 404). */
   @Post('anomalies/:id/state')
   @HttpCode(200)
   async setState(@Param('id') id: string, @Body() b: Record<string, unknown>, @Req() req: AuthenticatedRequest) {
     const a = req.authCtx!;
     const note = b?.['note'];
     if (note !== undefined && note !== null && typeof note !== 'string') throw new BadRequestException('note : texte');
+    const rk = b?.['resolutionKind'];
+    if (rk !== undefined && rk !== null && rk !== 'classified') throw new BadRequestException('resolutionKind : « classified » (la résolution par correction est automatique)');
     return unwrap(await this.calc.setAnomalyState(a.tenantId, a.userId, uuid(id, 'id'), {
       state: str(b, 'state', 20),
       note: typeof note === 'string' && note.length > 0 ? note : undefined,
+      resolutionKind: rk === 'classified' ? 'classified' : undefined,
+    }));
+  }
+
+  /** Affectation à un gestionnaire + échéance de traitement — auditée. */
+  @Post('anomalies/:id/assign')
+  @HttpCode(200)
+  async assign(@Param('id') id: string, @Body() b: Record<string, unknown>, @Req() req: AuthenticatedRequest) {
+    const a = req.authCtx!;
+    const due = b?.['dueAt'];
+    if (due !== undefined && due !== null && typeof due !== 'string') throw new BadRequestException('dueAt : horodatage ISO');
+    return unwrap(await this.calc.assignAnomaly(a.tenantId, a.userId, uuid(id, 'id'), {
+      userId: b?.['userId'] === null ? null : optUuid(b?.['userId'], 'userId') ?? null,
+      dueAt: typeof due === 'string' ? due : null,
     }));
   }
 }

@@ -30,6 +30,9 @@ import {
   timeAnomaliesPage, timeDayDetailPage, timeEmployeeCalendarPage,
   timeMyPresencePage, timeResultsPage, timeRunsPage,
 } from './pages/time-calc.ts';
+import {
+  timeMyRequestsPage, timePayrollPage, timePeriodsPage, timeRequestsPage,
+} from './pages/time-corrections.ts';
 import { states, stateForError } from './ui/kit.ts';
 
 const appRoot = document.getElementById('app')!;
@@ -84,6 +87,11 @@ const routes: RouteDef[] = [
   { pattern: '/time/anomalies', render: () => timeAnomaliesPage(session), anyOf: ['time.anomalies_view', 'time.anomalies_manage'] },
   { pattern: '/time/runs', render: () => timeRunsPage(session), anyOf: ['time.calc_view', 'time.calc_run', 'time.calc_recalc'] },
   { pattern: '/time/presence', render: () => timeMyPresencePage(session), anyOf: ['time.results_view_own'] },
+  // Corrections, clôture et préparation paie (E10.3).
+  { pattern: '/time/requests-mine', render: () => timeMyRequestsPage(session), anyOf: ['time.correction_request_self'] },
+  { pattern: '/time/requests', render: () => timeRequestsPage(session), anyOf: ['time.correction_view', 'time.correction_admin'] },
+  { pattern: '/time/periods', render: () => timePeriodsPage(session), anyOf: ['time.period_manage', 'time.preclose_view', 'time.period_close', 'time.period_reopen'] },
+  { pattern: '/time/payroll', render: () => timePayrollPage(session), anyOf: ['time.payroll_view', 'time.payroll_export'] },
 ];
 
 const CRUMB_BY_PREFIX: Array<[string, () => ReturnType<typeof crumbsOf>]> = [
@@ -107,6 +115,10 @@ const CRUMB_BY_PREFIX: Array<[string, () => ReturnType<typeof crumbsOf>]> = [
   ['/time/anomalies', () => crumbsOf(['nav.dashboard', '/'], ['nav.time', '/time/schedules'], ['nav.timeAnomalies', null])],
   ['/time/runs', () => crumbsOf(['nav.dashboard', '/'], ['nav.time', '/time/schedules'], ['nav.timeRuns', null])],
   ['/time/presence', () => crumbsOf(['nav.dashboard', '/'], ['nav.time', '/time/schedules'], ['nav.timeMyPresence', null])],
+  ['/time/requests-mine', () => crumbsOf(['nav.dashboard', '/'], ['nav.time', '/time/schedules'], ['nav.timeMyRequests', null])],
+  ['/time/requests', () => crumbsOf(['nav.dashboard', '/'], ['nav.time', '/time/schedules'], ['nav.timeRequests', null])],
+  ['/time/periods', () => crumbsOf(['nav.dashboard', '/'], ['nav.time', '/time/schedules'], ['nav.timePeriods', null])],
+  ['/time/payroll', () => crumbsOf(['nav.dashboard', '/'], ['nav.time', '/time/schedules'], ['nav.timePayroll', null])],
   ['/admin', () => crumbsOf(['nav.dashboard', '/'], ['nav.adminUsers', null])],
   ['/config', () => crumbsOf(['nav.dashboard', '/'], ['nav.config', null])],
   ['/audit', () => crumbsOf(['nav.dashboard', '/'], ['nav.audit', null])],

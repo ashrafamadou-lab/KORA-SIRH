@@ -35,6 +35,7 @@ import {
   PRESENCE_PARAM_KEYS,
   type ComputeDayInput,
   type DayComputation,
+  type DayJustification,
   type EmploymentContext,
   type PlannedDay,
   type PresenceEvent,
@@ -106,6 +107,10 @@ interface EmployeeContextBundle {
   eventRows: Array<{ id: string; local_date: string; local_time: string; event_type: string; site_id: string | null; tz: string }>;
   pendingDates: Set<string>;
   consumed: Set<string>;
+  /** Surcouche corrective E10.3 (événements APPROUVÉS) — épinglés par journée. */
+  pinned: Map<string, Array<{ id: string; localMinute: number; type: 'in' | 'out'; siteId: string | null }>>;
+  justifications: Map<string, DayJustification[]>;
+  correctionsCount: Map<string, number>;
 }
 
 interface DayEvaluation {
@@ -171,12 +176,16 @@ export class CalcService {
 
         const paramsCache = new Map<string, ParamsAtDate>();
         const siteTz = await this.siteTimeZones(tx);
+        const frozen = await this.frozenPeriods(tx);
         let written = 0; let unchanged = 0; let errored = 0; let anomaliesTotal = 0; let blockingTotal = 0;
 
         for (const employeeId of employees) {
           const ctx = await this.loadEmployeeContext(tx, employeeId, input.periodStart, input.periodEnd);
           for (let i = 0; i < days; i += 1) {
             const date = addDays(input.periodStart, i);
+            // Journée en période VERROUILLÉE/CLÔTURÉE : les résultats retenus sont
+            // FIGÉS (la base refuserait l'écriture) — comptée « inchangée », documenté.
+            if (this.isFrozen(frozen, ctx, date)) { unchanged += 1; continue; }
             const evaluation = await this.evaluateDay(tx, tenantId, ctx, date, paramsCache, siteTz);
             const persisted = await this.persistDay(tx, tenantId, runId, employeeId, date, evaluation);
             if (persisted.wrote) {
@@ -187,6 +196,23 @@ export class CalcService {
             if (evaluation.calcState === 'error') errored += 1;
           }
         }
+
+        // E10.3 — parcours « anomalie bloquante ⇒ demande » : chaque anomalie
+        // BLOQUANTE d'origine emploi écrite par CETTE exécution reçoit un BROUILLON
+        // de demande de correction (origin auto_anomaly), une seule fois par anomalie.
+        await tx.$executeRaw`
+          INSERT INTO time.correction_requests
+            (tenant_id, employee_id, work_date, kind, origin, requester_user_id, motive, payload, anomaly_id)
+          SELECT a.tenant_id, a.employee_id, a.work_date, 'exclude_event', 'auto_anomaly', ${actor}::uuid,
+                 'brouillon automatique : anomalie bloquante « ' || a.code || ' »',
+                 jsonb_build_object('eventId', a.refs -> 'eventIds' ->> 0),
+                 a.id
+            FROM time.day_anomalies a
+            JOIN time.day_results r ON r.id = a.day_result_id
+           WHERE r.calc_run_id = ${runId}::uuid AND a.severity = 'blocking'
+             AND a.code IN ('suspended', 'not_yet_hired', 'terminated')
+             AND a.refs -> 'eventIds' ->> 0 IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM time.correction_requests cr WHERE cr.anomaly_id = a.id)`;
 
         const status = errored > 0 ? 'completed_with_errors' : 'completed';
         const durationMs = Date.now() - startedAt;
@@ -250,12 +276,14 @@ export class CalcService {
       }
       const paramsCache = new Map<string, ParamsAtDate>();
       const siteTz = await this.siteTimeZones(tx);
+      const frozen = await this.frozenPeriods(tx);
       const diffs: unknown[] = [];
       let wouldWrite = 0; let unchanged = 0;
       for (const employeeId of employees) {
         const ctx = await this.loadEmployeeContext(tx, employeeId, input.periodStart, input.periodEnd);
         for (let i = 0; i < days; i += 1) {
           const date = addDays(input.periodStart, i);
+          if (this.isFrozen(frozen, ctx, date)) { unchanged += 1; continue; }
           const evaluation = await this.evaluateDay(tx, tenantId, ctx, date, paramsCache, siteTz);
           const current = await this.readCurrent(tx, employeeId, date);
           const next = this.rowShape(evaluation);
@@ -387,6 +415,31 @@ export class CalcService {
     return new Map(rows.map((r) => [r.id, r.time_zone]));
   }
 
+  /** Périodes VERROUILLÉES/CLÔTURÉES/ARCHIVÉES du tenant — leurs journées sont figées. */
+  private async frozenPeriods(tx: Prisma.TransactionClient): Promise<Array<{
+    scope_kind: string; company_id: string | null; site_id: string | null;
+    period_start: string; period_end: string;
+  }>> {
+    return tx.$queryRaw`
+      SELECT scope_kind, company_id, site_id, period_start::text, period_end::text
+        FROM time.periods WHERE status IN ('locked', 'closed', 'archived')`;
+  }
+
+  private isFrozen(
+    frozen: Array<{ scope_kind: string; company_id: string | null; site_id: string | null; period_start: string; period_end: string }>,
+    ctx: EmployeeContextBundle, date: string,
+  ): boolean {
+    for (const p of frozen) {
+      if (date < p.period_start || date > p.period_end) continue;
+      if (p.scope_kind === 'tenant') return true;
+      const org = ctx.orgRows.find((a) => a.effective_from <= date && (a.effective_to === null || a.effective_to > date));
+      if (!org) continue;
+      if (p.scope_kind === 'company' && org.company_id === p.company_id) return true;
+      if (p.scope_kind === 'site' && org.site_id === p.site_id) return true;
+    }
+    return false;
+  }
+
   /** Préchargement PAR SALARIÉ (période ± 1 jour) — évite le N+1 jour par jour. */
   private async loadEmployeeContext(
     tx: Prisma.TransactionClient, employeeId: string, periodStart: string, periodEnd: string,
@@ -436,11 +489,90 @@ export class CalcService {
       SELECT DISTINCT local_date::text FROM time.punch_events
        WHERE employee_id = ${employeeId}::uuid AND match_status <> 'matched'
          AND local_date IS NOT NULL AND local_date BETWEEN ${periodStart}::date AND ${periodEnd}::date`;
-    return {
+    const ctx: EmployeeContextBundle = {
       employee, scheduleRows, versionRows, dayRows, orgRows, exceptionRows, holidayRows, eventRows,
       pendingDates: new Set(pendingRows.map((r) => r.local_date)),
       consumed: new Set<string>(),
+      pinned: new Map(), justifications: new Map(), correctionsCount: new Map(),
     };
+    // Surcouche corrective APPROUVÉE (E10.3) — appliquée AVANT l'appariement, dans
+    // l'ordre de création (déterministe) : exclusions, retypages, sites corrigés,
+    // rattachements forcés, événements ajoutés (épinglés), justifications.
+    const corrections = await tx.$queryRaw<Array<{ id: string; work_date: string; kind: string; effect: Record<string, unknown> }>>`
+      SELECT id, work_date::text, kind, effect FROM time.correction_events
+       WHERE employee_id = ${employeeId}::uuid
+         AND work_date BETWEEN ${addDays(periodStart, -1)}::date AND ${addDays(periodEnd, 1)}::date
+       ORDER BY created_at, id`;
+    this.applyCorrectionOverlay(ctx, corrections);
+    return ctx;
+  }
+
+  /** Chirurgie du POOL d'événements par la surcouche corrective — le brut reste intact. */
+  private applyCorrectionOverlay(
+    ctx: EmployeeContextBundle,
+    corrections: Array<{ id: string; work_date: string; kind: string; effect: Record<string, unknown> }>,
+  ): void {
+    const bump = (date: string): void => {
+      ctx.correctionsCount.set(date, (ctx.correctionsCount.get(date) ?? 0) + 1);
+    };
+    for (const c of corrections) {
+      const eff = c.effect;
+      bump(c.work_date);
+      if (typeof eff['excludeEventId'] === 'string') {
+        ctx.eventRows = ctx.eventRows.filter((e) => e.id !== eff['excludeEventId']);
+        continue;
+      }
+      const retype = eff['retype'] as { eventId?: string; type?: string } | undefined;
+      if (retype?.eventId && typeof retype.type === 'string') {
+        const row = ctx.eventRows.find((e) => e.id === retype.eventId);
+        if (row) row.event_type = retype.type;
+        continue;
+      }
+      const site = eff['overrideSite'] as { eventId?: string; siteId?: string | null } | undefined;
+      if (site?.eventId) {
+        const row = ctx.eventRows.find((e) => e.id === site.eventId);
+        if (row) row.site_id = site.siteId ?? null;
+        continue;
+      }
+      const reattach = eff['reattach'] as { eventId?: string; targetDate?: string } | undefined;
+      if (reattach?.eventId && typeof reattach.targetDate === 'string') {
+        const row = ctx.eventRows.find((e) => e.id === reattach.eventId);
+        if (row) {
+          ctx.eventRows = ctx.eventRows.filter((e) => e.id !== row.id);
+          const rel = daysBetween(reattach.targetDate, row.local_date) * 1440 + timeToMinute(row.local_time);
+          const type = row.event_type === 'in' || row.event_type === 'break_end' ? 'in'
+            : row.event_type === 'out' || row.event_type === 'break_start' ? 'out' : 'in';
+          const list = ctx.pinned.get(reattach.targetDate) ?? [];
+          list.push({ id: row.id, localMinute: rel, type, siteId: row.site_id });
+          ctx.pinned.set(reattach.targetDate, list);
+        }
+        continue;
+      }
+      const add = eff['addEvent'] as { localMinute?: number; type?: string; siteId?: string | null } | undefined;
+      if (add && typeof add.localMinute === 'number' && (add.type === 'in' || add.type === 'out')) {
+        const list = ctx.pinned.get(c.work_date) ?? [];
+        list.push({ id: `corr-${c.id}`, localMinute: Math.round(add.localMinute), type: add.type, siteId: add.siteId ?? null });
+        ctx.pinned.set(c.work_date, list);
+        continue;
+      }
+      const justify = eff['justify'] as { target?: string; category?: string; minutes?: number | null } | undefined;
+      if (justify && typeof justify.target === 'string' && typeof justify.category === 'string') {
+        const list = ctx.justifications.get(c.work_date) ?? [];
+        list.push({
+          target: justify.target as DayJustification['target'],
+          category: justify.category,
+          minutes: justify.minutes ?? null,
+        });
+        ctx.justifications.set(c.work_date, list);
+        continue;
+      }
+      const offsite = eff['offsite'] as { category?: string; minutes?: number | null } | undefined;
+      if (offsite && typeof offsite.category === 'string') {
+        const list = ctx.justifications.get(c.work_date) ?? [];
+        list.push({ target: 'offsite', category: offsite.category, minutes: offsite.minutes ?? null });
+        ctx.justifications.set(c.work_date, list);
+      }
+    }
   }
 
   // ==================================================================
@@ -565,6 +697,16 @@ export class CalcService {
       });
     }
     for (const e of out) ctx.consumed.add(e.id);
+    // Événements ÉPINGLÉS par une correction approuvée : rattachés à CETTE journée
+    // sans fenêtre ni différend — le rattachement est la décision elle-même.
+    for (const p of ctx.pinned.get(date) ?? []) {
+      out.push({
+        id: p.id, localMinute: p.localMinute, type: p.type,
+        siteMatches: p.siteId === null || info.siteId === null ? null : p.siteId === info.siteId,
+        ambiguousTime: false,
+      });
+      ctx.consumed.add(p.id);
+    }
     return out;
   }
 
@@ -644,6 +786,10 @@ export class CalcService {
         employment: this.employmentAt(ctx, date),
         events, params: at.params,
         hasPendingUnmatched: ctx.pendingDates.has(date),
+        corrections: {
+          justifications: ctx.justifications.get(date) ?? [],
+          appliedCount: ctx.correctionsCount.get(date) ?? 0,
+        },
       };
       const computation = computeDay(input);
       // Événements du JOUR CIVIL hors de TOUTE fenêtre d'appariement (veille, jour,
@@ -682,6 +828,8 @@ export class CalcService {
           earlyDepartureMinutesRaw: 0, earlyDepartureMinutes: 0, absenceMinutes: 0, nightMinutes: 0,
           restDayMinutes: 0, holidayMinutes: 0, overtimeCandidateMinutes: 0, usedEventIds: [],
           anomalies: [{ code: 'calc_failed', severity: 'blocking', detail: note }],
+          justifiedCategory: null, justifiedMinutes: 0, lateJustified: false, earlyJustified: false,
+          correctionsApplied: ctx.correctionsCount.get(date) ?? 0,
         },
         plannedInfo: info, paramsUsed, tz,
         firstInIso: null, lastOutIso: null, calcState: 'error', calcNote: note,
@@ -712,6 +860,9 @@ export class CalcService {
       absence_minutes: c.absenceMinutes, night_minutes: c.nightMinutes,
       rest_day_minutes: c.restDayMinutes, holiday_minutes: c.holidayMinutes,
       overtime_candidate_minutes: c.overtimeCandidateMinutes,
+      justified_category: c.justifiedCategory, justified_minutes: c.justifiedMinutes,
+      late_justified: c.lateJustified, early_justified: c.earlyJustified,
+      corrections_applied: c.correctionsApplied,
       first_in: ev.firstInIso, last_out: ev.lastOutIso,
       work_periods: c.periods, used_event_ids: c.usedEventIds,
       tz: ev.tz, schedule_model_code: p.modelCode, schedule_model_version: p.modelVersion,
@@ -735,6 +886,7 @@ export class CalcService {
              r.late_minutes_raw, r.late_minutes, r.early_departure_minutes_raw, r.early_departure_minutes,
              r.absence_minutes, r.night_minutes, r.rest_day_minutes, r.holiday_minutes,
              r.overtime_candidate_minutes,
+             r.justified_category, r.justified_minutes, r.late_justified, r.early_justified, r.corrections_applied,
              to_char(r.first_in AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS first_in,
              to_char(r.last_out AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS last_out,
              r.work_periods, r.used_event_ids, r.tz, r.schedule_model_code, r.schedule_model_version,
@@ -797,7 +949,9 @@ export class CalcService {
          first_in, last_out, work_periods, used_event_ids,
          presence_minutes, worked_minutes, break_minutes, late_minutes_raw, late_minutes,
          early_departure_minutes_raw, early_departure_minutes, absence_minutes, night_minutes,
-         rest_day_minutes, holiday_minutes, overtime_candidate_minutes, day_status, calc_state, calc_note)
+         rest_day_minutes, holiday_minutes, overtime_candidate_minutes,
+         justified_category, justified_minutes, late_justified, early_justified, corrections_applied,
+         day_status, calc_state, calc_note)
       VALUES (${tenantId}::uuid, ${employeeId}::uuid, ${date}::date, ${version}, true, ${runId}::uuid,
               ${PRESENCE_ENGINE_VERSION}, ${ev.tz}, ${p.modelCode}, ${p.modelVersion}, ${p.cycleDayIndex},
               ${p.planned?.startMinute ?? null}, ${p.planned?.endMinute ?? null},
@@ -810,6 +964,7 @@ export class CalcService {
               ${c.presenceMinutes}, ${c.workedMinutes}, ${c.breakMinutes}, ${c.lateMinutesRaw}, ${c.lateMinutes},
               ${c.earlyDepartureMinutesRaw}, ${c.earlyDepartureMinutes}, ${c.absenceMinutes}, ${c.nightMinutes},
               ${c.restDayMinutes}, ${c.holidayMinutes}, ${c.overtimeCandidateMinutes},
+              ${c.justifiedCategory}, ${c.justifiedMinutes}, ${c.lateJustified}, ${c.earlyJustified}, ${c.correctionsApplied},
               ${c.status}, ${ev.calcState}, ${ev.calcNote})
       RETURNING id`;
     const resultId = rows[0]!.id;
@@ -916,6 +1071,9 @@ export class CalcService {
     r.absence_minutes AS "absenceMinutes", r.night_minutes AS "nightMinutes",
     r.rest_day_minutes AS "restDayMinutes", r.holiday_minutes AS "holidayMinutes",
     r.overtime_candidate_minutes AS "overtimeCandidateMinutes", r.engine_version AS "engineVersion",
+    r.justified_category AS "justifiedCategory", r.justified_minutes AS "justifiedMinutes",
+    r.late_justified AS "lateJustified", r.early_justified AS "earlyJustified",
+    r.corrections_applied AS "correctionsApplied",
     (SELECT count(*)::int FROM time.day_anomalies an WHERE an.day_result_id = r.id AND an.state = 'open') AS "openAnomalies"`;
 
   async myResults(
@@ -1039,7 +1197,9 @@ export class CalcService {
       if (!result) return { kind: 'not_found' };
       const anomalies = await tx.$queryRaw<Array<Record<string, unknown>>>`
         SELECT a.id, a.code, a.severity, a.detail, a.refs, a.state, a.state_note AS "stateNote",
-               a.state_at AS "stateAt", a.created_at AS "createdAt"
+               a.state_at AS "stateAt", a.created_at AS "createdAt",
+               a.assigned_to AS "assignedTo", a.due_at AS "dueAt",
+               a.resolution_kind AS "resolutionKind", a.resolution_event_id AS "resolutionEventId"
           FROM time.day_anomalies a WHERE a.day_result_id = ${result['id'] as string}::uuid
          ORDER BY CASE a.severity WHEN 'blocking' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END, a.code`;
       const events = await tx.$queryRaw<Array<Record<string, unknown>>>`
@@ -1198,6 +1358,8 @@ export class CalcService {
       const items = await tx.$queryRaw<Array<Record<string, unknown>>>`
         SELECT a.id, a.code, a.severity, a.detail, a.refs, a.state, a.state_note AS "stateNote",
                a.state_at AS "stateAt", a.work_date::text AS "workDate", a.created_at AS "createdAt",
+               a.assigned_to AS "assignedTo", a.due_at AS "dueAt",
+               a.resolution_kind AS "resolutionKind", a.resolution_event_id AS "resolutionEventId",
                a.employee_id AS "employeeId", e.matricule, e.first_name AS "firstName", e.last_name AS "lastName",
                r.day_status AS "dayStatus", r.site_id AS "siteId", r.unit_id AS "unitId"
           FROM time.day_anomalies a
@@ -1220,13 +1382,19 @@ export class CalcService {
 
   async setAnomalyState(
     tenantId: string, actor: string, anomalyId: string,
-    input: { state: string; note?: string },
+    input: { state: string; note?: string; resolutionKind?: string },
   ): Promise<TimeOutcome<Record<never, never>>> {
-    if (input.state === 'resolved') {
-      return { kind: 'conflict', reason: '« resolved » est RÉSERVÉ au circuit de correction (E10.3) : une correction approuvée résout, jamais un clic' };
+    if (input.state === 'resolved' && input.resolutionKind !== 'classified') {
+      return {
+        kind: 'conflict',
+        reason: '« resolved » exige une référence probante : correction appliquée (résolution automatique) ou CLASSEMENT motivé (resolutionKind=classified + note) — jamais un simple clic',
+      };
     }
-    if (!['open', 'acknowledged', 'dismissed'].includes(input.state)) {
-      return { kind: 'invalid', reason: 'state : open, acknowledged ou dismissed' };
+    if (input.state === 'resolved' && (input.note === undefined || input.note.length === 0)) {
+      return { kind: 'invalid', reason: 'classement : note motivée OBLIGATOIRE' };
+    }
+    if (!['open', 'acknowledged', 'dismissed', 'resolved'].includes(input.state)) {
+      return { kind: 'invalid', reason: 'state : open, acknowledged, dismissed ou resolved (classement motivé)' };
     }
     if (input.note !== undefined && input.note.length > 300) return { kind: 'invalid', reason: 'note : 300 caractères max' };
     return this.prisma.withTenant(tenantId, async (tx) => {
@@ -1243,10 +1411,23 @@ export class CalcService {
         return { kind: 'not_found' };
       }
       try {
-        await tx.$executeRaw`
-          UPDATE time.day_anomalies
-             SET state = ${input.state}, state_note = ${input.note ?? null}, state_by = ${actor}::uuid, state_at = now()
-           WHERE id = ${anomalyId}::uuid`;
+        if (input.state === 'resolved') {
+          // CLASSEMENT motivé sans correction : décision explicite, note obligatoire —
+          // la référence probante est portée par resolution_kind (trigger).
+          await tx.$executeRaw`
+            UPDATE time.day_anomalies
+               SET state = 'resolved', resolution_kind = 'classified', resolution_event_id = NULL,
+                   state_note = ${input.note!}, state_by = ${actor}::uuid, state_at = now()
+             WHERE id = ${anomalyId}::uuid`;
+        } else {
+          // Quitter « resolved » (réouverture contrôlée) PURGE la référence de résolution.
+          await tx.$executeRaw`
+            UPDATE time.day_anomalies
+               SET state = ${input.state}, state_note = ${input.note ?? null},
+                   resolution_kind = NULL, resolution_event_id = NULL,
+                   state_by = ${actor}::uuid, state_at = now()
+             WHERE id = ${anomalyId}::uuid`;
+        }
       } catch (e) {
         // Le TRIGGER porte la machine à états — son message est la vérité.
         return { kind: 'conflict', reason: (e as Error).message.split('\n')[0] ?? 'transition interdite' };
@@ -1254,8 +1435,37 @@ export class CalcService {
       await auditAuth(tx, tenantId, {
         action: 'time_anomaly_state_changed', actorUserId: actor, module: 'time',
         recordType: 'day_anomaly', recordId: anomalyId,
-        oldValue: { state: anom.state }, newValue: { state: input.state, note: input.note ?? null },
+        oldValue: { state: anom.state },
+        newValue: { state: input.state, note: input.note ?? null, resolutionKind: input.state === 'resolved' ? 'classified' : null },
         result: 'success',
+      });
+      return { kind: 'ok' };
+    });
+  }
+
+  /** Affectation d'une anomalie à un gestionnaire + échéance de traitement. */
+  async assignAnomaly(
+    tenantId: string, actor: string, anomalyId: string,
+    input: { userId?: string | null; dueAt?: string | null },
+  ): Promise<TimeOutcome<Record<never, never>>> {
+    return this.prisma.withTenant(tenantId, async (tx) => {
+      const set = await scopeSetFor(tx, actor, 'time.anomalies_manage');
+      if (set.kind === 'none') return { kind: 'forbidden', reason: 'permission requise : time.anomalies_manage (avec une portée)' };
+      const rows = await tx.$queryRaw<Array<{ employee_id: string; work_date: string }>>`
+        SELECT employee_id, work_date::text FROM time.day_anomalies WHERE id = ${anomalyId}::uuid`;
+      const anom = rows[0];
+      if (!anom) return { kind: 'not_found' };
+      if (set.kind === 'scoped' && !(await this.scopeCovers(tx, set, anom.employee_id, anom.work_date))) {
+        return { kind: 'not_found' };
+      }
+      await tx.$executeRaw`
+        UPDATE time.day_anomalies
+           SET assigned_to = ${input.userId ?? null}::uuid, due_at = ${input.dueAt ?? null}::timestamptz
+         WHERE id = ${anomalyId}::uuid`;
+      await auditAuth(tx, tenantId, {
+        action: 'time_anomaly_assigned', actorUserId: actor, module: 'time',
+        recordType: 'day_anomaly', recordId: anomalyId,
+        newValue: { userId: input.userId ?? null, dueAt: input.dueAt ?? null }, result: 'success',
       });
       return { kind: 'ok' };
     });

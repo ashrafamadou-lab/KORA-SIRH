@@ -1299,11 +1299,220 @@ export const OPENAPI_SPEC = {
     },
     '/time/anomalies/{id}/state': {
       post: {
-        summary: 'Changer l’ÉTAT d’une anomalie (open → acknowledged | dismissed…) — time.anomalies_manage À PORTÉE RÉELLE, audité',
-        description: '« resolved » est RÉSERVÉ au circuit de correction E10.3 : demande explicite ⇒ 409. Machine à états portée par un TRIGGER PostgreSQL. La permission est exigée par le SERVICE avec la portée E8/E9 (un responsable d’unité agit sur SON périmètre ; hors périmètre : introuvable, pas interdit).',
+        summary: 'Changer l’ÉTAT d’une anomalie (ack/dismiss/reopen, CLASSEMENT motivé) — time.anomalies_manage À PORTÉE RÉELLE, audité',
+        description: '« resolved » exige une référence PROBANTE (trigger PostgreSQL) : correction appliquée (résolution AUTOMATIQUE à l’application) ou classement motivé (resolutionKind=classified + note obligatoire). Quitter resolved purge la référence. La permission est exigée par le SERVICE avec la portée E8/E9 (hors périmètre : introuvable, pas interdit).',
         security: bearer,
         parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
         responses: { '200': { description: 'État changé' }, '409': err('Transition interdite ou resolved demandé') },
+      },
+    },
+    // ---------------- Corrections & clôture (E10.3) ----------------
+    '/time/corrections': {
+      get: {
+        summary: 'Demandes de correction de sa portée — time.correction_view (portée réelle)',
+        security: bearer,
+        responses: { '200': { description: '{ items }' }, '403': err('Permission ou portée absente') },
+      },
+      post: {
+        summary: 'Créer une demande de correction (soi via correction_request_self ; tiers via correction_request À PORTÉE)',
+        description: 'Douze types normalisés (entrée/sortie manquante, retypage, exclusion motivée, rattachement, site, justifications, hors-site, référence approuvée). Une correction ne remplace JAMAIS le brut : surcouche approuvée consommée au recalcul. L’identifiant du corps ne peut pas élargir le périmètre (self = soi, point).',
+        security: bearer,
+        responses: { '201': { description: '{ id }' }, '400': err('Payload invalide pour le type') },
+      },
+    },
+    '/time/corrections/mine': {
+      get: {
+        summary: 'MES demandes (demandeur ou bénéficiaire) — time.correction_request_self',
+        security: bearer,
+        responses: { '200': { description: '{ linked, items }' } },
+      },
+    },
+    '/time/corrections/{id}': {
+      get: {
+        summary: 'Détail d’une demande : contenu, instantanés avant/après, pièces (métadonnées cloisonnées)',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ request, attachments }' }, '404': err('Hors portée') },
+      },
+    },
+    '/time/corrections/{id}/submit': {
+      post: {
+        summary: 'SOUMETTRE la demande dans le circuit E3 « temps_correction » — contenu FIGÉ par la base dès soumission',
+        description: 'Le contexte du circuit porte manager, périmètre, ampleur, période close et rétroactivité ; la décision est liée à la VERSION exacte soumise (toute modification exige retour + resoumission versionnée).',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ instanceId, version }' }, '409': err('Statut incompatible ou circuit absent') },
+      },
+    },
+    '/time/corrections/{id}/decide': {
+      post: {
+        summary: 'Décider (approve/reject/return) via E3 — approbation FINALE ⇒ application automatique',
+        description: 'Séparation des tâches NATIVE (jamais sa propre demande), anti-concurrence par verrou d’instance, idempotencyKey rejouable. Si l’application échoue, la demande reste explicitement « approved » puis « application_failed » — jamais faussement appliquée.',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ status, applied?, applicationError? }' }, '403': err('Non approbateur de l’étape ou auto-approbation') },
+      },
+    },
+    '/time/corrections/{id}/cancel': {
+      post: {
+        summary: 'Annuler AVANT décision (demandeur) — brouillon/retourné direct, soumis via E3',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: 'Annulée' }, '409': err('Déjà décidée') },
+      },
+    },
+    '/time/corrections/{id}/apply': {
+      post: {
+        summary: 'RELANCER l’application d’une demande approuvée/échouée — time.correction_admin, audité',
+        description: 'IDEMPOTENT PAR LA BASE : une demande = au plus UN événement correctif (UNIQUE) — un rejeu ne double jamais l’effet ; le recalcul E10.2 relancé constate l’identité.',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ eventId, runId }' }, '409': err('Statut incompatible ou période close (réouverture requise)') },
+      },
+    },
+    '/time/corrections/{id}/attachments': {
+      post: {
+        summary: 'Joindre une pièce (PDF/PNG/JPEG ≤ 5 Mo, empreinte SHA-256, analyse antivirus extensible)',
+        description: 'Une pièce SENSIBLE (médicale…) est cloisonnée : nom masqué hors de son cercle, téléchargement restreint, chaque consultation JOURNALISÉE. Suppression LOGIQUE seulement.',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '201': { description: '{ id, sha256 }' }, '409': err('Demande décidée') },
+      },
+    },
+    '/time/corrections/attachments/{id}': {
+      get: {
+        summary: 'Télécharger une pièce — cercle de la demande ou time.attachments_view ; accès JOURNALISÉ + audité',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ filename, mime, contentBase64, sha256 }' }, '403': err('Hors cercle sans time.attachments_view') },
+      },
+    },
+    '/time/corrections/import': {
+      post: {
+        summary: 'Import CONTRÔLÉ de corrections historiques (≤ 200 lignes) — time.correction_admin, audité',
+        description: 'Chaque ligne devient une demande origin=import SOUMISE au circuit standard : l’import ne court-circuite jamais l’approbation.',
+        security: bearer,
+        responses: { '200': { description: '{ created, submitted, errors }' } },
+      },
+    },
+    '/time/anomalies/{id}/assign': {
+      post: {
+        summary: 'AFFECTER une anomalie à un gestionnaire + échéance de traitement — time.anomalies_manage, audité',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: 'Affectée' }, '404': err('Hors portée') },
+      },
+    },
+    '/time/anomalies/sweep': {
+      post: {
+        summary: 'Balayage des ÉCHÉANCES d’anomalies (dues sous 24 h) — notification des non-traitées',
+        security: bearer,
+        responses: { '200': { description: '{ notified }' } },
+      },
+    },
+    '/time/periods': {
+      get: {
+        summary: 'Périodes de présence (statuts, révisions, clôtures) — permissions de gestion/consultation',
+        security: bearer,
+        responses: { '200': { description: '{ items }' } },
+      },
+      post: {
+        summary: 'Créer une période (tenant/société/site, bornes datées) — time.period_manage, audité',
+        description: 'UNE SEULE période active compatible par périmètre et intervalle — contrainte d’exclusion PostgreSQL ⇒ 409.',
+        security: bearer,
+        responses: { '201': { description: '{ id }' }, '409': err('Chevauchement de périodes') },
+      },
+    },
+    '/time/periods/{id}/status': {
+      post: {
+        summary: 'Cycle de gestion : open ⇄ in_review ⇄ locked — time.period_manage (close/reopen : opérations dédiées)',
+        description: 'Une période VERROUILLÉE ou CLÔTURÉE refuse toute écriture de résultat et tout événement correctif PAR LA BASE.',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: 'Statut changé' }, '409': err('Transition interdite') },
+      },
+    },
+    '/time/periods/{id}/preclose': {
+      get: {
+        summary: 'PRÉ-CLÔTURE : contrôles complets, bloquants CONFIGURABLES (E4 temps.precloture.bloquants)',
+        description: 'Salariés attendus/manquants, anomalies ouvertes et bloquantes, demandes en attente, approuvées non appliquées, jours en échec, sans horaire/affectation, HS candidates, repos/fériés travaillés, divergences de version de moteur, résultats non recalculés après correction.',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ period, controls, blockers, warnings, closable }' } },
+      },
+    },
+    '/time/periods/{id}/close': {
+      post: {
+        summary: 'CLÔTURER (depuis « locked ») — time.period_close ; idempotente, anti-concurrente, EMPREINTE sha256',
+        description: 'Fige les résultats RETENUS ligne à ligne, les totaux préparatoires paie, les paramètres utilisés et la version du moteur. Bloquants ⇒ 409 détaillé ; avertissements ⇒ confirmation EXPLICITE, tracée dans la clôture. Deux clôtures concurrentes : verrou de ligne + UNIQUE close_no — une seule passe.',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '201': { description: '{ close: n°, empreinte, totaux, avertissements tracés }' }, '409': err('Bloquants, avertissements non confirmés, statut ou double clôture') },
+      },
+    },
+    '/time/periods/{id}/reopen': {
+      post: {
+        summary: 'ROUVRIR une période clôturée — time.period_reopen, motif OBLIGATOIRE, circuit E3 si configuré',
+        description: 'La clôture précédente DEMEURE (marquée superseded), la période passe en révision +1. Si un circuit « temps_reouverture » est actif, la réouverture n’a d’effet qu’à son approbation.',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ mode: workflow|direct, instanceId? }' }, '409': err('Période non clôturée') },
+      },
+    },
+    '/time/periods/{id}/closes': {
+      get: {
+        summary: 'Clôtures VERSIONNÉES d’une période (n°, empreinte, totaux, statut, exports)',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ items }' } },
+      },
+    },
+    '/time/closes/{id}/payroll': {
+      get: {
+        summary: 'Variables temps PRÉPARATOIRES paie d’une clôture — time.payroll_view, consultation auditée',
+        description: 'Jours attendus/présents/absences (non) justifiées par catégorie, retards et départs RETENUS, heures travaillées/nuit/repos/férié, HS CANDIDATES, corrections appliquées — AUCUN taux, AUCUN montant : des variables temps, pas des éléments de paie.',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ close, rows }' }, '403': err('Permission absente') },
+      },
+    },
+    '/time/closes/{id}/verify': {
+      get: {
+        summary: 'VÉRIFIER l’empreinte : recalcul depuis les lignes figées, comparaison au sha256 stocké',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ stored, recomputed, match }' } },
+      },
+    },
+    '/time/closes/{id}/compare': {
+      get: {
+        summary: 'DIFFÉRENCES entre deux clôtures d’une période (par salarié, champ à champ)',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ differences }' } },
+      },
+    },
+    '/time/closes/{id}/exports': {
+      get: {
+        summary: 'Exports d’une clôture (schéma, format, révision, empreinte, statut)',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ items }' } },
+      },
+      post: {
+        summary: 'GÉNÉRER un export préparatoire paie (csv|json, schéma kora-paie-prep-1) — time.payroll_export, audité',
+        description: 'Contenu CANONIQUE (sans horodatage) : le même export rejoué rend l’EXISTANT (idempotence prouvée par empreinte) ; un contenu différent crée une révision EXPLICITE. Un export remplacé est marqué « superseded », jamais supprimé. Aucune donnée personnelle inutile, aucun montant.',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '201': { description: '{ export, reused }' }, '403': err('Permission absente') },
+      },
+    },
+    '/time/payroll-exports/{id}/download': {
+      get: {
+        summary: 'Télécharger un export — time.payroll_export, chaque téléchargement AUDITÉ',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ filename, mime, contentBase64, sha256 }' }, '403': err('Permission absente') },
       },
     },
     '/openapi.json': {

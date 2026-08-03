@@ -16,7 +16,7 @@
  *    (les justifications sont des modules ultérieurs).
  */
 
-export const PRESENCE_ENGINE_VERSION = 'kora-presence-1.0.0';
+export const PRESENCE_ENGINE_VERSION = 'kora-presence-1.1.0';
 
 export type DayStatus =
   | 'present' | 'late' | 'early_departure' | 'late_and_early_departure'
@@ -82,6 +82,25 @@ export interface EmploymentContext {
   hasAssignment: boolean;
 }
 
+/**
+ * Justifications APPROUVÉES du jour (E10.3) — issues d'événements correctifs,
+ * jamais d'une saisie directe. Elles QUALIFIENT les faits (catégorie, minutes
+ * justifiées) sans JAMAIS inventer d'heure travaillée ni effacer une mesure :
+ * un retard justifié reste mesuré et retenu ; une absence justifiée reste une
+ * absence — la paie (module ultérieur) décidera de l'effet financier.
+ */
+export interface DayJustification {
+  target: 'absence' | 'late' | 'early_departure' | 'offsite';
+  category: string;
+  minutes?: number | null;
+}
+
+export interface DayCorrections {
+  justifications: DayJustification[];
+  /** Nombre TOTAL d'événements correctifs consommés pour la journée (traçabilité). */
+  appliedCount: number;
+}
+
 export interface ComputeDayInput {
   planned: PlannedDay | null;           // null = aucun horaire applicable
   holiday: boolean;
@@ -90,6 +109,7 @@ export interface ComputeDayInput {
   params: PresenceParams;
   /** Des événements NON APPARIÉS du jour existent encore (résolution incertaine). */
   hasPendingUnmatched?: boolean;
+  corrections?: DayCorrections;
 }
 
 export interface WorkPeriod { startMinute: number; endMinute: number }
@@ -113,6 +133,12 @@ export interface DayComputation {
   overtimeCandidateMinutes: number;
   usedEventIds: string[];
   anomalies: PresenceAnomaly[];
+  /** Qualification E10.3 (corrections approuvées) — jamais une heure inventée. */
+  justifiedCategory: string | null;
+  justifiedMinutes: number;
+  lateJustified: boolean;
+  earlyJustified: boolean;
+  correctionsApplied: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -248,10 +274,39 @@ function zeroComputation(status: DayStatus): DayComputation {
     lateMinutesRaw: 0, lateMinutes: 0, earlyDepartureMinutesRaw: 0, earlyDepartureMinutes: 0,
     absenceMinutes: 0, nightMinutes: 0, restDayMinutes: 0, holidayMinutes: 0,
     overtimeCandidateMinutes: 0, usedEventIds: [], anomalies: [],
+    justifiedCategory: null, justifiedMinutes: 0, lateJustified: false, earlyJustified: false,
+    correctionsApplied: 0,
   };
 }
 
+/**
+ * Superpose les JUSTIFICATIONS approuvées sur le résultat calculé — après coup,
+ * de façon déterministe (la première justification d'absence gagne, documenté) :
+ *  - absence/hors-site : catégorie + minutes justifiées (bornées au manque mesuré,
+ *    sauf minutes EXPLICITES de la correction) — le statut factuel ne change pas ;
+ *  - retard / départ anticipé : marqués justifiés, la MESURE et le RETENU restent.
+ */
+function applyJustifications(out: DayComputation, corrections: DayCorrections | undefined): DayComputation {
+  if (!corrections) return out;
+  out.correctionsApplied = corrections.appliedCount;
+  for (const j of corrections.justifications) {
+    if (j.target === 'late') out.lateJustified = true;
+    else if (j.target === 'early_departure') out.earlyJustified = true;
+    else if ((j.target === 'absence' || j.target === 'offsite') && out.justifiedCategory === null) {
+      out.justifiedCategory = j.category;
+      out.justifiedMinutes = j.minutes !== undefined && j.minutes !== null
+        ? Math.max(0, Math.round(j.minutes))
+        : out.absenceMinutes;
+    }
+  }
+  return out;
+}
+
 export function computeDay(input: ComputeDayInput): DayComputation {
+  return applyJustifications(computeDayFacts(input), input.corrections);
+}
+
+function computeDayFacts(input: ComputeDayInput): DayComputation {
   const { planned, holiday, employment, events, params } = input;
   const anomalies: PresenceAnomaly[] = [];
 

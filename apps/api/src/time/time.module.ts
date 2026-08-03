@@ -9,6 +9,7 @@ import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { RbacModule } from '../rbac/rbac.module';
 import { NotifyModule } from '../notify/notify.module';
+import { WorkflowModule } from '../workflow/workflow.module';
 import { SchedulesService } from './schedules.service';
 import { SchedulesController } from './schedules.controller';
 import { PunchesService } from './punches.service';
@@ -16,10 +17,13 @@ import { PunchImportService } from './punch-import.service';
 import { PunchesController } from './punches.controller';
 import { CalcService } from './calc.service';
 import { CalcController } from './calc.controller';
+import { CorrectionsService } from './corrections.service';
+import { PeriodsService } from './periods.service';
+import { CorrectionsController, PeriodsController } from './corrections.controller';
 
 @Module({
-  imports: [AuthModule, RbacModule, NotifyModule],
-  controllers: [SchedulesController, PunchesController, CalcController],
-  providers: [SchedulesService, PunchesService, PunchImportService, CalcService],
+  imports: [AuthModule, RbacModule, NotifyModule, WorkflowModule],
+  controllers: [SchedulesController, PunchesController, CalcController, CorrectionsController, PeriodsController],
+  providers: [SchedulesService, PunchesService, PunchImportService, CalcService, CorrectionsService, PeriodsService],
 })
 export class TimeModule {}

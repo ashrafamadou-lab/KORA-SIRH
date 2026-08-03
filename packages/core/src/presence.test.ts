@@ -299,3 +299,84 @@ test('reproductibilité : mêmes entrées + mêmes paramètres ⇒ résultat STR
   const b = computeDay({ ...input, events: [...input.events].reverse() });
   assert.deepEqual(a, b, 'l’ordre d’arrivée des événements est sans effet (tri total interne)');
 });
+
+// ---------------------------------------------------------------------------
+// E10.3 — justifications approuvées (superposées, jamais des heures inventées)
+// ---------------------------------------------------------------------------
+
+test('justification d’absence : catégorie posée, minutes = manque mesuré par défaut', () => {
+  const d = day({
+    events: [],
+    corrections: { appliedCount: 1, justifications: [{ target: 'absence', category: 'maladie' }] },
+  });
+  assert.equal(d.status, 'absent', 'le FAIT reste une absence — la qualification ne le réécrit pas');
+  assert.equal(d.absenceMinutes, 480);
+  assert.equal(d.justifiedCategory, 'maladie');
+  assert.equal(d.justifiedMinutes, 480, 'défaut = le manque mesuré');
+  assert.equal(d.correctionsApplied, 1);
+});
+
+test('justification avec minutes EXPLICITES : bornée à la demande, pas au calcul', () => {
+  const d = day({
+    events: [],
+    corrections: { appliedCount: 1, justifications: [{ target: 'absence', category: 'mission', minutes: 240 }] },
+  });
+  assert.equal(d.justifiedCategory, 'mission');
+  assert.equal(d.justifiedMinutes, 240);
+});
+
+test('retard justifié : la MESURE et le RETENU demeurent, seul le drapeau change', () => {
+  const d = day({
+    params: { ...P, lateToleranceMin: 5 },
+    events: [ev(500, 'in'), ev(1020, 'out')], // 20 min de retard
+    corrections: { appliedCount: 1, justifications: [{ target: 'late', category: 'transport' }] },
+  });
+  assert.equal(d.status, 'late', 'le statut factuel ne change pas');
+  assert.equal(d.lateMinutesRaw, 20);
+  assert.equal(d.lateMinutes, 20);
+  assert.equal(d.lateJustified, true);
+  assert.equal(d.justifiedCategory, null, 'le retard justifié ne crée pas de catégorie d’absence');
+});
+
+test('départ anticipé justifié + hors-site : drapeaux et catégorie cohabitent', () => {
+  const d = day({
+    events: [ev(480, 'in'), ev(900, 'out')],
+    corrections: {
+      appliedCount: 2,
+      justifications: [
+        { target: 'early_departure', category: 'autorisation' },
+        { target: 'offsite', category: 'formation', minutes: 120 },
+      ],
+    },
+  });
+  assert.equal(d.earlyJustified, true);
+  assert.equal(d.justifiedCategory, 'formation');
+  assert.equal(d.justifiedMinutes, 120);
+  assert.equal(d.correctionsApplied, 2);
+});
+
+test('deux justifications d’absence : la PREMIÈRE gagne (règle déterministe documentée)', () => {
+  const d = day({
+    events: [],
+    corrections: {
+      appliedCount: 2,
+      justifications: [
+        { target: 'absence', category: 'maladie' },
+        { target: 'absence', category: 'mission', minutes: 60 },
+      ],
+    },
+  });
+  assert.equal(d.justifiedCategory, 'maladie');
+  assert.equal(d.justifiedMinutes, 480);
+});
+
+test('sans corrections : les champs E10.3 restent neutres et la reproductibilité tient', () => {
+  const events = [ev(480, 'in'), ev(1020, 'out')];
+  const a = day({ events });
+  assert.equal(a.justifiedCategory, null);
+  assert.equal(a.justifiedMinutes, 0);
+  assert.equal(a.lateJustified, false);
+  assert.equal(a.correctionsApplied, 0);
+  const b = day({ events, corrections: { appliedCount: 0, justifications: [] } });
+  assert.deepEqual({ ...a }, { ...b }, 'corrections vides ≡ absence de corrections');
+});

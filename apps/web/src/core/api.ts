@@ -136,6 +136,30 @@ export const API_CONTRACT = {
   timeAnomalyCatalog: { method: 'get', path: '/time/anomalies/catalog' },
   timeAnomalies: { method: 'get', path: '/time/anomalies' },
   timeAnomalyState: { method: 'post', path: '/time/anomalies/{id}/state' },
+  // Corrections & clôture (E10.3)
+  timeAnomalyAssign: { method: 'post', path: '/time/anomalies/{id}/assign' },
+  timeCorrectionCreate: { method: 'post', path: '/time/corrections' },
+  timeCorrections: { method: 'get', path: '/time/corrections' },
+  timeCorrectionsMine: { method: 'get', path: '/time/corrections/mine' },
+  timeCorrection: { method: 'get', path: '/time/corrections/{id}' },
+  timeCorrectionSubmit: { method: 'post', path: '/time/corrections/{id}/submit' },
+  timeCorrectionCancel: { method: 'post', path: '/time/corrections/{id}/cancel' },
+  timeCorrectionDecide: { method: 'post', path: '/time/corrections/{id}/decide' },
+  timeCorrectionApply: { method: 'post', path: '/time/corrections/{id}/apply' },
+  timeCorrectionAttach: { method: 'post', path: '/time/corrections/{id}/attachments' },
+  timeAttachment: { method: 'get', path: '/time/corrections/attachments/{id}' },
+  timePeriods: { method: 'get', path: '/time/periods' },
+  timePeriodCreate: { method: 'post', path: '/time/periods' },
+  timePeriodStatus: { method: 'post', path: '/time/periods/{id}/status' },
+  timePreclose: { method: 'get', path: '/time/periods/{id}/preclose' },
+  timePeriodClose: { method: 'post', path: '/time/periods/{id}/close' },
+  timePeriodReopen: { method: 'post', path: '/time/periods/{id}/reopen' },
+  timePeriodCloses: { method: 'get', path: '/time/periods/{id}/closes' },
+  timeClosePayroll: { method: 'get', path: '/time/closes/{id}/payroll' },
+  timeCloseVerify: { method: 'get', path: '/time/closes/{id}/verify' },
+  timeCloseExports: { method: 'get', path: '/time/closes/{id}/exports' },
+  timeCloseExportCreate: { method: 'post', path: '/time/closes/{id}/exports' },
+  timePayrollExportDownload: { method: 'get', path: '/time/payroll-exports/{id}/download' },
 } as const;
 
 export type ContractKey = keyof typeof API_CONTRACT;
@@ -331,6 +355,48 @@ export interface TimeAggregateRow {
   restDayMinutes: number; holidayMinutes: number; overtimeCandidateMinutes: number; openAnomalies: number;
 }
 export interface TimeAnomalyCatalogItem { code: string; labelFr: string; labelEn: string; defaultSeverity: string }
+// Corrections & clôture (E10.3)
+export interface TimeCorrectionRow {
+  id: string; employeeId: string; workDate: string; kind: string; origin: string; status: string;
+  version: number; requesterUserId: string; motive: string; payload: Record<string, unknown>;
+  beforeSnapshot: Record<string, unknown> | null; afterSnapshot: Record<string, unknown> | null;
+  anomalyId: string | null; workflowInstanceId: string | null; appliedEventId: string | null;
+  applicationError: string | null; submittedAt: string | null; decidedAt: string | null;
+  appliedAt: string | null; createdAt: string;
+  matricule: string; firstName: string; lastName: string; attachmentCount: number;
+}
+export interface TimeCorrectionDetail {
+  request: TimeCorrectionRow;
+  attachments: Array<{ id: string; filename: string; mime: string; byteSize: number; sensitive: boolean; avStatus: string; createdAt: string }>;
+}
+export interface TimePeriodRow {
+  id: string; scopeKind: string; companyId: string | null; siteId: string | null;
+  label: string; periodStart: string; periodEnd: string; status: string; revision: number;
+  createdAt: string; closeCount: number; activeCloseNo: number | null;
+}
+export interface TimePrecloseControl { key: string; count: number; blocking: boolean }
+export interface TimePrecloseOut {
+  period: { id: string; label: string; status: string; revision: number; periodStart: string; periodEnd: string };
+  controls: TimePrecloseControl[]; blockers: number; warnings: number; closable: boolean;
+}
+export interface TimeCloseRow {
+  id: string; closeNo: number; periodRevision: number; engineVersion: string;
+  datasetSha256: string; employeesCount: number; daysCount: number; resultsCount: number;
+  totals: Record<string, number>; warnings: unknown[]; status: string;
+  closedBy: string; closedAt: string; exportCount?: number;
+  periodLabel?: string; periodStart?: string; periodEnd?: string; periodStatus?: string;
+}
+export interface TimePayrollRow {
+  employeeId: string; matricule: string; firstName: string; lastName: string;
+  expectedDays: number; presentDays: number; unjustifiedAbsenceDays: number;
+  justified: Record<string, { days: number; minutes: number }>;
+  lateMinutes: number; earlyDepartureMinutes: number; workedMinutes: number; nightMinutes: number;
+  restDayMinutes: number; holidayMinutes: number; overtimeCandidateMinutes: number; correctionsApplied: number;
+}
+export interface TimeExportRow {
+  id: string; schemaVersion: string; format: string; revision: number; sha256: string;
+  employeesCount: number; status: string; generatedBy: string; generatedAt: string; byteSize: number;
+}
 
 export interface TimeEmployeeSchedule {
   assigned: boolean;
