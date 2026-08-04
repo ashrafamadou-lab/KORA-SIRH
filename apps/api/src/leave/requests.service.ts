@@ -1437,7 +1437,7 @@ export class LeaveRequestsService {
     if (!emp[0]) return { status: 'unknown', hireDate: null, terminationDate: null, suspensions: [] };
     const events = await tx.$queryRaw<Array<{ event_type: string; effective_date: string }>>`
       SELECT event_type, effective_date::text FROM core.career_events
-       WHERE employee_id = ${employeeId}::uuid ORDER BY effective_date, created_at`;
+       WHERE employee_id = ${employeeId}::uuid ORDER BY effective_date, occurred_at`;
     let terminationDate: string | null = null;
     const suspensions: Array<{ from: string; to: string | null }> = [];
     let open: string | null = null;
