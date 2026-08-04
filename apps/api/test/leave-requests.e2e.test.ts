@@ -507,7 +507,7 @@ test('06 circuit manager → RH : instruction, approbation liée à la version, 
   // Absence opposable : UNE par version, impact présence DIFFÉRÉ (E11.3), politique et paramètres CONSERVÉS.
   const abs = psql(`SELECT status || '|' || presence_impact || '|' || quantity || '|' || (policy_version IS NOT NULL)
     FROM leave.absences WHERE request_id = '${reqE1Sept}' AND request_version = 1`);
-  assert.equal(abs, 'approved|deferred|4.000|t');
+  assert.equal(abs, 'approved|deferred|4.000|true'); // bool||text psql ⇒ 'true' (leçon CI 30805563415)
   // Ledger : consommation 4 + libération de la réservation — le solde est une SOMME, jamais une retouche.
   assert.equal(ledgerCount(`request_id = '${reqE1Sept}' AND entry_kind = 'consumption'`), 1);
   assert.equal(ledgerCount(`request_id = '${reqE1Sept}' AND entry_kind = 'release'`), 1);
@@ -556,8 +556,7 @@ test('07 séparation des tâches : auto-approbation interdite, bénéficiaire EX
   // Étape 0 = manager… qui est aussi l'AUTEUR : séparation des tâches ⇒ 403 ; il DÉLÈGUE (E3).
   const creatorDecide = await api(`/leave/requests/${forRh.id}/decide`, mgr, { action: 'approve' });
   assert.equal(creatorDecide.status, 403);
-  const instanceId = psql(`SELECT workflow_instance_id FROM leave.requests WHERE id = '${forRh.id}'`);
-  await postJson(`/workflow/instances/${instanceId}/delegate`, mgr, { toUserId: rhq2UserId });
+  await postJson(`/leave/requests/${forRh.id}/delegate`, mgr, { toUserId: rhq2UserId });
   await postJson(`/leave/requests/${forRh.id}/decide`, rhq2, { action: 'approve' }); // étape 0 déléguée
   // Étape 1 (rôle RH) : le BÉNÉFICIAIRE détient le rôle… et reste exclu de SA décision.
   const benefDecide = await api(`/leave/requests/${forRh.id}/decide`, rhq, { action: 'approve' });
@@ -902,17 +901,24 @@ test('18 isolation tenant : invisible ET inactionnable, FK PostgreSQL rejetées'
   assert.equal((await api(`/leave/requests/${reqE1Sept}`, bAdm, undefined, 'GET')).status, 404);
   assert.equal((await api(`/leave/requests/${reqE1Sept}/decide`, bAdm, { action: 'approve' })).status, 404);
   assert.equal((await api(`/leave/requests/attachments/${malAttachment}`, bAdm, undefined, 'GET')).status, 404);
-  // FK composites : une demande du tenant B ne référence JAMAIS un salarié du tenant A.
+  // Lignes B RÉELLES d'abord (jamais un INSERT…SELECT vide — leçon CI 30818155276).
+  const bUser = psql(`SELECT id FROM admin.users WHERE email = '${bAdmEmail}'`);
+  const bEmp = psql(`INSERT INTO core.employees (tenant_id, matricule, first_name, last_name, status, hire_date)
+    VALUES ('${tenantBId}', 'LRB-${RID}', 'Bio', 'Kassim', 'active', '2025-01-01') RETURNING id`);
+  const bType = psql(`INSERT INTO leave.absence_types (tenant_id, code, label_fr, label_en, category, paid, unit, created_by, status)
+    VALUES ('${tenantBId}', 'CAPB', 'CAP B', 'CAP B', 'legal', true, 'open_days', '${bUser}', 'active') RETURNING id`);
+  // FK composites : une demande du tenant B ne référence JAMAIS un salarié du tenant A…
   assert.equal(psqlFails(`INSERT INTO leave.requests (tenant_id, employee_id, absence_type_id, created_by)
-    VALUES ('${tenantBId}', '${e1}', '${typeCap}', (SELECT id FROM admin.users WHERE email = '${bAdmEmail}'))`), true);
-  // Ni un mouvement lié à la demande d'un autre tenant.
+    VALUES ('${tenantBId}', '${e1}', '${bType}', '${bUser}')`), true, 'salarié A refusé côté B');
+  // …ni un type du tenant A…
+  assert.equal(psqlFails(`INSERT INTO leave.requests (tenant_id, employee_id, absence_type_id, created_by)
+    VALUES ('${tenantBId}', '${bEmp}', '${typeCap}', '${bUser}')`), true, 'type A refusé côté B');
+  // …ni un mouvement B lié à la demande d'un tenant A (ligne source RÉELLE).
   assert.equal(psqlFails(`INSERT INTO leave.entitlement_ledger (tenant_id, employee_id, absence_type_id,
       reference_period_start, reference_period_end, entry_kind, quantity, unit, effective_on, origin,
       idempotency_key, request_id, request_version)
-    SELECT '${tenantBId}', e.id, t.id, '2026-01-01', '2026-12-31', 'reservation', 1, 'open_days',
-           '2026-09-01', 'workflow', 'xt-${rid}', '${reqE1Sept}', 1
-      FROM core.employees e, leave.absence_types t
-     WHERE e.tenant_id = '${tenantBId}' AND t.tenant_id = '${tenantBId}' LIMIT 1`), true);
+    VALUES ('${tenantBId}', '${bEmp}', '${bType}', '2026-01-01', '2026-12-31', 'reservation', 1, 'open_days',
+            '2026-09-01', 'workflow', 'xt-${rid}', '${reqE1Sept}', 1)`), true, 'demande A refusée côté B');
 });
 
 test('19 file RH : filtres sensibles/rétroactives/échecs, suivi des délais (paramètre E4), masquage conservé', async () => {

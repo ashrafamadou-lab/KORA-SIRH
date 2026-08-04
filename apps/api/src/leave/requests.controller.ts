@@ -130,6 +130,13 @@ export class LeaveRequestsController {
     }));
   }
 
+  @Post('requests/:id/delegate')
+  @HttpCode(200)
+  async delegate(@Param('id') id: string, @Body() b: Record<string, unknown>, @Req() req: AuthenticatedRequest) {
+    const a = req.authCtx!;
+    return unwrap(await this.requests.delegateStep(a.tenantId, a.userId, uuid(id, 'id'), uuid(b['toUserId'], 'toUserId')));
+  }
+
   @Post('requests/:id/withdraw')
   @HttpCode(200)
   async withdraw(@Param('id') id: string, @Req() req: AuthenticatedRequest) {

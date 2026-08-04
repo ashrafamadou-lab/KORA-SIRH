@@ -406,34 +406,46 @@ export class LeaveRequestsService {
   async submit(tenantId: string, actor: string, id: string): Promise<TimeOutcome<{
     instanceId: string; version: number; quantity: number; checks: CheckItem[];
   }>> {
-    // 1. Préparation (SANS écriture) : évaluation complète + contexte du circuit.
-    const prep = await this.prisma.withTenant(tenantId, async (tx) => {
+    // UNE transaction sous VERROU : contrôles, gel versionné, réservation et statut
+    // vivent ensemble. L'instance E3 n'est créée qu'une fois TOUT validé sous le
+    // verrou — une soumission refusée ne laisse JAMAIS d'instance orpheline dont la
+    // fermeture cascaderait sur la demande (leçon CI run 30892743033 : l'annulation
+    // de l'orphelin annulait la soumission GAGNANTE, même sujet).
+    return this.prisma.withTenant<TimeOutcome<{
+      instanceId: string; version: number; quantity: number; checks: CheckItem[];
+    }>>(tenantId, async (tx) => {
       const req = await this.lockRequest(tx, id);
-      if (!req) return { kind: 'not_found' as const };
+      if (!req) return { kind: 'not_found' };
       const who = await this.ownership(tx, actor, req);
-      if (!who.ownerOrAdmin) return { kind: 'forbidden' as const, reason: 'soumission : salarié, auteur ou administration' };
+      if (!who.ownerOrAdmin) return { kind: 'forbidden', reason: 'soumission : salarié, auteur ou administration' };
       if (req.status !== 'draft' && req.status !== 'returned') {
-        return { kind: 'conflict' as const, reason: `demande au statut « ${req.status} » — seule une demande en brouillon ou retournée se soumet` };
+        return { kind: 'conflict', reason: `demande au statut « ${req.status} » — seule une demande en brouillon ou retournée se soumet` };
       }
       const type = await this.typeRow(tx, req.absence_type_id);
-      if (!type) return { kind: 'not_found' as const };
+      if (!type) return { kind: 'not_found' };
+      // Sérialisation anti SURCONSOMMATION par (salarié, type) : deux soumissions
+      // concurrentes se suivent — la seconde constate le disponible déjà réservé.
+      // ($executeRaw : pg_advisory_xact_lock renvoie void — leçon CI 30850506848.)
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${tenantId}::text || ':leave_reserve:' || ${req.employee_id}::text || ':' || ${req.absence_type_id}::text))`;
       const ev = await this.evaluate(tx, tenantId, actor, req, type);
       if (ev.kind !== 'ok') return ev;
       if (hasBlocking(ev.checks)) {
         const msg = ev.checks.filter((c) => c.level === 'error').map((c) => `${c.code} : ${c.fr}`).join(' ; ');
-        return { kind: 'invalid' as const, reason: `soumission refusée — ${msg}` };
+        return { kind: 'invalid', reason: `soumission refusée — ${msg}` };
       }
-      const mgr = await this.managerUserOf(tx, req.employee_id, ev.payload.startDate);
+      const version = req.current_version + 1;
+      const p = ev.payload;
+      const mgr = await this.managerUserOf(tx, req.employee_id, p.startDate);
       const org = await tx.$queryRaw<Array<{ company_id: string | null; site_id: string | null; unit_id: string | null }>>`
         SELECT company_id, site_id, unit_id FROM core.employee_assignments
          WHERE employee_id = ${req.employee_id}::uuid AND is_primary
-           AND daterange(effective_from, effective_to, '[)') @> ${ev.payload.startDate}::date LIMIT 1`;
+           AND daterange(effective_from, effective_to, '[)') @> ${p.startDate}::date LIMIT 1`;
       const beneficiary = await tx.$queryRaw<Array<{ user_id: string | null }>>`
         SELECT user_id FROM core.employees WHERE id = ${req.employee_id}::uuid`;
       const excluded = [beneficiary[0]?.user_id, req.created_by].filter((u): u is string => !!u && u !== undefined);
       const context = {
         requestId: req.id,
-        requestVersion: req.current_version + 1,
+        requestVersion: version,
         employeeId: req.employee_id,
         typeCode: type.confidential ? 'CONFIDENTIEL' : type.code,
         confidential: type.confidential,
@@ -449,65 +461,42 @@ export class LeaveRequestsService {
         // Séparation des tâches : demandeur ET bénéficiaire exclus de la décision.
         excludedDeciderUserIds: [...new Set(excluded)],
       };
-      return { kind: 'ok' as const, req, type, ev, context };
-    });
-    if (prep.kind !== 'ok') return prep;
-    const version = prep.req.current_version + 1;
-
-    // 2. Instance E3 — circuit choisi par précédence FERMÉE (retro > sensible > standard).
-    const submitted = await this.wf.submit(tenantId, actor, {
-      definitionKey: prep.ev.circuitKey, subjectType: 'leave_request', subjectId: id, context: prep.context,
-    });
-    if (submitted.kind === 'no_active_definition') {
-      return { kind: 'conflict', reason: `aucun circuit « ${prep.ev.circuitKey} » actif — configurez le workflow avant de soumettre` };
-    }
-    if (submitted.kind !== 'ok') return { kind: 'invalid', reason: 'workflow vide' };
-
-    // 3. Gel + RÉSERVATION sérialisée (verrou consultatif par salarié+type) + statut.
-    const done = await this.prisma.withTenant(tenantId, async (tx) => {
-      const req = await this.lockRequest(tx, id);
-      if (!req || (req.status !== 'draft' && req.status !== 'returned')) {
-        return { kind: 'conflict' as const, reason: 'état modifié pendant la soumission — relancer' };
+      // Instance E3 (sa propre transaction, connexion distincte) — créée en DERNIER :
+      // tout refus ci-dessus n'a rien produit, ni ici ni côté workflow.
+      const submitted = await this.wf.submit(tenantId, actor, {
+        definitionKey: ev.circuitKey, subjectType: 'leave_request', subjectId: id, context,
+      });
+      if (submitted.kind === 'no_active_definition') {
+        return { kind: 'conflict', reason: `aucun circuit « ${ev.circuitKey} » actif — configurez le workflow avant de soumettre` };
       }
-      // Sérialisation anti SURCONSOMMATION : deux soumissions concurrentes sur le
-      // même droit se suivent ; la seconde constate le disponible déjà réservé.
-      // ($executeRaw : pg_advisory_xact_lock renvoie void — leçon CI 30850506848.)
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${tenantId}::text || ':leave_reserve:' || ${req.employee_id}::text || ':' || ${req.absence_type_id}::text))`;
-      const type = prep.type;
-      const ev2 = await this.evaluate(tx, tenantId, actor, req, type);
-      if (ev2.kind !== 'ok') return ev2;
-      if (hasBlocking(ev2.checks)) {
-        const msg = ev2.checks.filter((c) => c.level === 'error').map((c) => `${c.code} : ${c.fr}`).join(' ; ');
-        return { kind: 'invalid' as const, reason: `soumission refusée (contrôle final sous verrou) — ${msg}` };
-      }
-      const p = ev2.payload;
-      const ins = await tx.$queryRaw<Array<{ id: string }>>`
+      if (submitted.kind !== 'ok') return { kind: 'invalid', reason: 'workflow vide' };
+      await tx.$queryRaw<Array<{ id: string }>>`
         INSERT INTO leave.request_versions (tenant_id, request_id, version, start_date, end_date,
           half_day_start, half_day_end, hours_requested, quantity, unit, count_detail, checks,
           policy_id, policy_version, params_used, retroactive, retro_reason, negative_used,
           comment, workflow_instance_id, created_by)
         VALUES (${tenantId}::uuid, ${id}::uuid, ${version}, ${p.startDate}::date, ${p.endDate}::date,
           ${p.halfDayStart}, ${p.halfDayEnd}, ${type.unit === 'hours' ? p.hours : null},
-          ${ev2.quantity}, ${ev2.unit}, ${JSON.stringify(ev2.count.detail)}::jsonb,
-          ${JSON.stringify(ev2.checks)}::jsonb,
-          ${ev2.policy?.policyId ?? null}::uuid, ${ev2.policy?.policyVersion ?? null},
-          ${JSON.stringify(ev2.paramsUsed)}::jsonb, ${ev2.retroactive},
-          ${ev2.retroactive ? (p.comment ?? '') : null}, ${ev2.checks.some((c) => c.code === 'negative_used')},
+          ${ev.quantity}, ${ev.unit}, ${JSON.stringify(ev.count.detail)}::jsonb,
+          ${JSON.stringify(ev.checks)}::jsonb,
+          ${ev.policy?.policyId ?? null}::uuid, ${ev.policy?.policyVersion ?? null},
+          ${JSON.stringify(ev.paramsUsed)}::jsonb, ${ev.retroactive},
+          ${ev.retroactive ? (p.comment ?? '') : null}, ${ev.checks.some((c) => c.code === 'negative_used')},
           ${p.comment}, ${submitted.instanceId}::uuid, ${actor}::uuid)
         RETURNING id`;
       // Réservation : mouvement append-only idempotent (jamais une retouche de solde).
-      if (ev2.quantity > 0) {
+      if (ev.quantity > 0) {
         const refYear = p.startDate.slice(0, 4);
         await tx.$executeRaw`
           INSERT INTO leave.entitlement_ledger (tenant_id, employee_id, absence_type_id, policy_id, policy_version,
             reference_period_start, reference_period_end, entry_kind, quantity, unit, effective_on, origin,
             business_ref, reason, params_used, idempotency_key, created_by, request_id, request_version)
           VALUES (${tenantId}::uuid, ${req.employee_id}::uuid, ${req.absence_type_id}::uuid,
-            ${ev2.policy?.policyId ?? null}::uuid, ${ev2.policy?.policyVersion ?? null},
+            ${ev.policy?.policyId ?? null}::uuid, ${ev.policy?.policyVersion ?? null},
             ${refYear + '-01-01'}::date, ${refYear + '-12-31'}::date, 'reservation',
-            ${ev2.quantity}, ${ev2.unit}, ${p.startDate}::date, 'workflow',
+            ${ev.quantity}, ${ev.unit}, ${p.startDate}::date, 'workflow',
             ${'demande ' + id + ' v' + version}, ${type.confidential ? MASKED : 'réservation à la soumission'},
-            ${JSON.stringify(ev2.paramsUsed)}::jsonb, ${reservationKey(id, version)}, ${actor}::uuid,
+            ${JSON.stringify(ev.paramsUsed)}::jsonb, ${reservationKey(id, version)}, ${actor}::uuid,
             ${id}::uuid, ${version})
           ON CONFLICT (tenant_id, idempotency_key) DO NOTHING`;
       }
@@ -522,37 +511,54 @@ export class LeaveRequestsService {
                workflow_instance_id = ${submitted.instanceId}::uuid
          WHERE id = ${id}::uuid`;
       await this.event(tx, tenantId, id, version, 'submitted', actor, {
-        instanceId: submitted.instanceId, circuit: prep.ev.circuitKey, quantity: ev2.quantity,
+        instanceId: submitted.instanceId, circuit: ev.circuitKey, quantity: ev.quantity,
       });
-      if (ev2.quantity > 0) {
-        await this.event(tx, tenantId, id, version, 'reservation_posted', actor, { quantity: ev2.quantity });
+      if (ev.quantity > 0) {
+        await this.event(tx, tenantId, id, version, 'reservation_posted', actor, { quantity: ev.quantity });
       }
       const recipients = await this.stakeholders(tx, req);
       await this.notifyUsers(tx, tenantId, actor, recipients, `conges-demande-soumise-${id}-v${version}`,
         'conges_demande_soumise', {
           demande: id, version: String(version),
           type: type.confidential ? 'absence' : type.code,
-          debut: p.startDate, fin: p.endDate, quantite: String(ev2.quantity),
+          debut: p.startDate, fin: p.endDate, quantite: String(ev.quantity),
         });
       await auditAuth(tx, tenantId, {
         action: 'leave_request_submitted', actorUserId: actor, module: 'leave',
         recordType: 'leave_request', recordId: id,
         newValue: {
-          version, instanceId: submitted.instanceId, circuit: prep.ev.circuitKey,
-          quantity: ev2.quantity, retroactive: ev2.retroactive,
+          version, instanceId: submitted.instanceId, circuit: ev.circuitKey,
+          quantity: ev.quantity, retroactive: ev.retroactive,
           type: type.confidential ? MASKED : type.code,
         },
         result: 'success',
       });
-      return { kind: 'ok' as const, versionId: ins[0]!.id, checks: ev2.checks, quantity: ev2.quantity };
+      return { kind: 'ok', instanceId: submitted.instanceId, version, quantity: ev.quantity, checks: ev.checks };
+    }, { timeoutMs: 30000 });
+  }
+
+  /** Délégation de l'étape courante (E3 décide : seul un acteur ASSIGNÉ délègue). */
+  async delegateStep(tenantId: string, actor: string, requestId: string, toUserId: string): Promise<TimeOutcome<{ delegated: boolean }>> {
+    const inst = await this.prisma.withTenant(tenantId, async (tx) => {
+      const rows = await tx.$queryRaw<Array<{ workflow_instance_id: string | null; status: string }>>`
+        SELECT workflow_instance_id, status FROM leave.requests WHERE id = ${requestId}::uuid`;
+      if (rows.length === 0) return { kind: 'not_found' as const };
+      if (!['submitted', 'in_review'].includes(rows[0]!.status) || !rows[0]!.workflow_instance_id) {
+        return { kind: 'conflict' as const, reason: `demande au statut « ${rows[0]!.status} » — rien à déléguer` };
+      }
+      return { kind: 'ok' as const, instanceId: rows[0]!.workflow_instance_id };
     });
-    if (done.kind !== 'ok') {
-      // Instance E3 orpheline : refermée par son créateur (transaction distincte).
-      const identity = await this.actorIdentity(tenantId, actor);
-      await this.wf.cancel(tenantId, identity, submitted.instanceId, { comment: 'soumission invalidée au contrôle final' }).catch(() => undefined);
-      return done;
-    }
-    return { kind: 'ok', instanceId: submitted.instanceId, version, quantity: done.quantity, checks: done.checks };
+    if (inst.kind !== 'ok') return inst;
+    const identity = await this.actorIdentity(tenantId, actor);
+    const out = await this.wf.delegate(tenantId, identity, inst.instanceId, toUserId, {});
+    if (out.kind === 'forbidden') return { kind: 'forbidden', reason: out.reason };
+    if (out.kind === 'stale') return { kind: 'conflict', reason: 'instance déjà décidée' };
+    if (out.kind !== 'ok') return { kind: 'invalid', reason: out.kind === 'invalid' ? out.reason : 'délégation impossible' };
+    await this.prisma.withTenant(tenantId, (tx) => auditAuth(tx, tenantId, {
+      action: 'leave_request_delegated', actorUserId: actor, module: 'leave',
+      recordType: 'leave_request', recordId: requestId, newValue: { toUserId }, result: 'success',
+    }));
+    return { kind: 'ok', delegated: true };
   }
 
   // ==================================================================
@@ -1018,7 +1024,7 @@ export class LeaveRequestsService {
                v.start_date::text AS "startDate", v.end_date::text AS "endDate",
                v.quantity::text AS quantity, v.unit, v.retroactive, v.comment,
                v.created_at AS "submittedAt",
-               (SELECT count(*) FROM leave.request_attachments a
+               (SELECT count(*)::int FROM leave.request_attachments a
                  WHERE a.request_id = r.id AND a.deleted_at IS NULL) AS "attachmentCount",
                (SELECT min(a.verified_status) FROM leave.request_attachments a
                  WHERE a.request_id = r.id AND a.deleted_at IS NULL) AS "attachmentStatus"

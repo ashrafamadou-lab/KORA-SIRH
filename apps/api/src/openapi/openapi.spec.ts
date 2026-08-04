@@ -1726,6 +1726,13 @@ export const OPENAPI_SPEC = {
         responses: { '200': { description: '{ status, applied?, applicationError? }' }, '403': err('Non assigné / auto-approbation interdite') },
       },
     },
+    '/leave/requests/{id}/delegate': {
+      post: {
+        summary: 'Déléguer l’étape courante (E3 : seul un acteur ASSIGNÉ délègue — l’auteur exclu de la décision passe la main)',
+        security: bearer,
+        responses: { '200': { description: '{ delegated }' }, '403': err('Acteur non assigné') },
+      },
+    },
     '/leave/requests/{id}/withdraw': {
       post: {
         summary: 'Retrait AVANT décision (brouillon/retourné : direct ; soumis : via E3) — libération de la réservation',
