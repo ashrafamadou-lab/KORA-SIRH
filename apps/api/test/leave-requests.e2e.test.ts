@@ -404,6 +404,9 @@ test('03 contrôles de soumission : préavis, bornes, demi-journée, justificati
   const refuseText = await refuse.text();
   assert.equal(refuse.status, 400, refuseText);
   assert.match(refuseText, /notice_days/);
+  // Retrait DIRECT d'un brouillon (sans circuit) : annulé, tracé « withdrawn ».
+  await postJson(`/leave/requests/${recSoon}/withdraw`, self, undefined);
+  assert.equal(psql(`SELECT status FROM leave.requests WHERE id = '${recSoon}'`), 'cancelled');
   // Bornes : 4 jours ouvrés > max 3 par demande ; demi-journée interdite (bloc min 1).
   const recLong = await newDraft(self, { typeId: typeRec, startDate: '2026-10-19', endDate: '2026-10-22' });
   const pvLong = await getJson<Preview>(`/leave/requests/preview/${recLong}`, self);
@@ -567,7 +570,7 @@ test('07 séparation des tâches : auto-approbation interdite, bénéficiaire EX
   // Traçabilité de la demande pour tiers : auteur, motif, permission, source, confirmation.
   const trace = psql(`SELECT on_behalf || '|' || on_behalf_permission || '|' || source || '|' || (employee_confirmed_at IS NOT NULL)
     FROM leave.requests WHERE id = '${forRh.id}'`);
-  assert.equal(trace, 't|leave.request_for_others|manager|t');
+  assert.equal(trace, 'true|leave.request_for_others|manager|true'); // bool||text psql ⇒ 'true'
 });
 
 test('08 rejet, retrait et RETOUR : libérations distinctes, resoumission versionnée, décision sur la version EXACTE', async () => {
@@ -922,17 +925,23 @@ test('18 isolation tenant : invisible ET inactionnable, FK PostgreSQL rejetées'
 });
 
 test('19 file RH : filtres sensibles/rétroactives/échecs, suivi des délais (paramètre E4), masquage conservé', async () => {
+  const adm = await token(slugA, admEmail);
   const rhq2 = await token(slugA, rhq2Email);
-  const all = await getJson<{ items: Array<Record<string, unknown>>; delayDays: number | null }>('/leave/requests/queue', rhq2);
+  const all = await getJson<{ items: Array<Record<string, unknown>>; delayDays: number | null }>('/leave/requests/queue', adm);
   assert.equal(all.delayDays, 3, 'délai d\'instruction = paramètre E4, jamais codé en dur');
   assert.ok(all.items.length >= 5);
-  // rhq2 n'a PAS sensitive_view : la ligne MAL reste générique même dans la file RH.
+  // adm (requests_admin SANS sensitive_view) : la ligne MAL reste générique même dans la file RH.
   const malRow = all.items.find((i) => i['id'] === reqMal);
-  assert.ok(malRow && malRow['typeCode'] === null && malRow['labelFr'] === 'Absence');
-  const sensitiveOnly = await getJson<{ items: Array<Record<string, unknown>> }>('/leave/requests/queue?sensitive=1', rhq2);
+  assert.ok(malRow && malRow['typeCode'] === null && malRow['labelFr'] === 'Absence',
+    `masquage file RH : ${JSON.stringify(malRow)}`);
+  // rhq2 hérite sensitive_view de son SECOND rôle (multi-rôles E2) : il voit le code — voulu.
+  const allRhq2 = await getJson<{ items: Array<Record<string, unknown>> }>('/leave/requests/queue', rhq2);
+  const malRhq2 = allRhq2.items.find((i) => i['id'] === reqMal);
+  assert.ok(malRhq2 && malRhq2['typeCode'] === 'MAL', 'la permission sensible (par rôle) débloque le code');
+  const sensitiveOnly = await getJson<{ items: Array<Record<string, unknown>> }>('/leave/requests/queue?sensitive=1', adm);
   assert.ok(sensitiveOnly.items.every((i) => i['confidential'] === true));
   assert.ok(sensitiveOnly.items.some((i) => i['id'] === reqMal));
-  const retroOnly = await getJson<{ items: Array<Record<string, unknown>> }>('/leave/requests/queue?retro=1', rhq2);
+  const retroOnly = await getJson<{ items: Array<Record<string, unknown>> }>('/leave/requests/queue?retro=1', adm);
   assert.ok(retroOnly.items.some((i) => i['id'] === reqRetro));
   assert.ok(retroOnly.items.every((i) => i['retroactive'] === true));
 });
@@ -947,7 +956,7 @@ test('20 journal : chaque opération sensible du cycle de vie est AUDITÉE ; not
     'leave_request_submitted', 'leave_request_review_started', 'leave_request_returned',
     'leave_request_approved', 'leave_request_rejected', 'leave_request_applied',
     'leave_request_application_failed', 'leave_request_withdrawn', 'leave_request_cancel_requested',
-    'leave_request_cancel_approved', 'leave_request_confirmed', 'leave_request_expired',
+    'leave_request_cancel_approved', 'leave_request_confirmed', 'leave_request_expired', 'leave_request_cancelled',
     'leave_attachment_added', 'leave_attachment_viewed', 'leave_attachment_verified',
     'leave_calendar_exported',
   ]) {

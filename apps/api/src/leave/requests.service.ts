@@ -93,6 +93,13 @@ export class LeaveRequestsService {
       return { kind: 'invalid', reason: 'heures : volume positif sur UNE seule journée' };
     }
     return this.prisma.withTenant(tenantId, async (tx) => {
+      // La PERMISSION se vérifie AVANT tout autre constat : un compte sans droit
+      // reçoit 403, jamais un indice sur son rattachement (leçon CI 30895813298).
+      const canSelf = await holdsPermission(tx, actor, 'leave.request_self');
+      const canOthers = await holdsPermission(tx, actor, 'leave.request_for_others');
+      if (!canSelf && !canOthers) {
+        return { kind: 'forbidden', reason: 'permission requise : leave.request_self ou leave.request_for_others' };
+      }
       const me = await linkedEmployee(tx, actor);
       let employeeId = input.employeeId ?? me;
       let onBehalf = false;
@@ -100,12 +107,12 @@ export class LeaveRequestsService {
       let source = 'ess';
       if (!employeeId) return { kind: 'invalid', reason: 'compte non relié à un dossier salarié — précisez employeeId' };
       if (employeeId === me) {
-        if (!(await holdsPermission(tx, actor, 'leave.request_self'))) {
+        if (!canSelf) {
           return { kind: 'forbidden', reason: 'permission requise : leave.request_self' };
         }
       } else {
         // Demande POUR UN TIERS (§11) : permission + périmètre réel + motif.
-        if (!(await holdsPermission(tx, actor, 'leave.request_for_others'))) {
+        if (!canOthers) {
           return { kind: 'forbidden', reason: 'permission requise : leave.request_for_others' };
         }
         const team = await teamEmployeeIds(tx, actor, input.startDate);
