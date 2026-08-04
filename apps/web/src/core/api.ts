@@ -201,6 +201,20 @@ export const API_CONTRACT = {
   leaveRequestAttachmentVerify: { method: 'post', path: '/leave/requests/attachments/{id}/verify' },
   leaveCalendar: { method: 'get', path: '/leave/calendar' },
   leaveCalendarExport: { method: 'get', path: '/leave/calendar/export' },
+  // Intégration présence, clôture congés, préparation paie, reporting (E11.3)
+  leavePeriods: { method: 'get', path: '/leave/periods' },
+  leavePeriodCreate: { method: 'post', path: '/leave/periods' },
+  leavePreclose: { method: 'get', path: '/leave/periods/{id}/preclose' },
+  leavePeriodClose: { method: 'post', path: '/leave/periods/{id}/close' },
+  leavePeriodReopen: { method: 'post', path: '/leave/periods/{id}/reopen' },
+  leavePeriodCloses: { method: 'get', path: '/leave/periods/{id}/closes' },
+  leaveCloseVerify: { method: 'get', path: '/leave/closes/{id}/verify' },
+  leaveCloseExports: { method: 'get', path: '/leave/closes/{id}/exports' },
+  leaveCloseExportCreate: { method: 'post', path: '/leave/closes/{id}/exports' },
+  leavePrepExportDownload: { method: 'get', path: '/leave/prep-exports/{id}/download' },
+  leaveIntegration: { method: 'get', path: '/leave/integration' },
+  leaveIntegrationRun: { method: 'post', path: '/leave/integration/run' },
+  leaveReports: { method: 'get', path: '/leave/reports' },
 } as const;
 
 export type ContractKey = keyof typeof API_CONTRACT;
@@ -557,6 +571,49 @@ export interface LeaveCalendarOut {
 export interface TimeExportRow {
   id: string; schemaVersion: string; format: string; revision: number; sha256: string;
   employeesCount: number; status: string; generatedBy: string; generatedAt: string; byteSize: number;
+}
+
+// --- Clôture congés, intégration présence, préparation paie (E11.3) ---
+export interface LeavePeriodRow {
+  id: string; label: string; periodStart: string; periodEnd: string;
+  status: string; revision: number; closeCount: number; activeFingerprint: string | null;
+}
+export interface LeavePrecloseCheck { code: string; level: 'blocking' | 'warning'; count: number; detail: string }
+export interface LeavePrecloseOut {
+  preclose: {
+    periodId: string; label: string; status: string; revision: number;
+    blocking: LeavePrecloseCheck[]; warnings: LeavePrecloseCheck[];
+  };
+}
+export interface LeaveCloseRow {
+  id: string; closeNo: number; periodRevision: number; engineVersion: string;
+  fingerprint: string; employeesCount: number; linesCount: number; movementsCount: number;
+  totals: Record<string, { accrued: number; consumed: number; available: number }>;
+  warnings: LeavePrecloseCheck[]; status: string; closedAt: string;
+}
+export interface LeavePrepExportRow {
+  id: string; schemaVersion: string; format: string; revision: number; sha256: string;
+  timeCloses: Array<{ id: string; label: string; closeNo: number; fingerprint: string }>;
+  employeesCount: number; errorReport: unknown; status: string; generatedAt: string;
+}
+export interface LeaveIntegrationOut {
+  integration: {
+    facts: Array<{ status: string; count: number }>;
+    impacts: Array<{ impact: string; count: number }>;
+    pending: Array<{ absenceId: string; employeeId: string; matricule: string; from: string; to: string; days: number }>;
+  };
+}
+export interface LeaveReportOut {
+  report: {
+    from: string; to: string;
+    balances: Array<{ unit: string; accrued: number; reserved: number; consumed: number; expired: number; available: number }>;
+    utilization: number | null;
+    requests: Array<{ status: string; count: number }>;
+    avgProcessingHours: number | null;
+    byCategory: Array<{ category: string; days: number; hours: number; absences: number }>;
+    byUnit: Array<{ unitId: string | null; code: string | null; days: number }>;
+    retroRequests: number; failedApplications: number; carriedInExposure: number; note: string;
+  };
 }
 
 export interface TimeEmployeeSchedule {

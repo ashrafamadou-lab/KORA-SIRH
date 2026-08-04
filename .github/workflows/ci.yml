@@ -285,7 +285,9 @@ jobs:
         run: node apps/web/scripts/build.mjs
 
       - name: Cache navigateur Playwright
-        uses: actions/cache@v4
+        # v5 (runtime Node.js 24) : supprime l'avertissement « forcé sur node24 »
+        # relevé par la revue sponsor E11.2 sur actions/cache@v4 (runtime node20).
+        uses: actions/cache@v5
         with:
           path: ~/.cache/ms-playwright
           key: pw-chromium-${{ env.PLAYWRIGHT_VERSION }}

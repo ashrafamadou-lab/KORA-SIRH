@@ -1817,6 +1817,94 @@ export const OPENAPI_SPEC = {
         responses: { '200': { description: '{ csv }' } },
       },
     },
+    // ------------------------- Intégration, clôture & paie congés (E11.3) -------------------------
+    '/leave/periods': {
+      post: {
+        summary: 'Créer une période de congés (leave.period_manage) — bornes immuables, anti-chevauchement PostgreSQL',
+        security: bearer,
+        responses: { '201': { description: '{ id }' }, '409': err('Périodes chevauchantes') },
+      },
+      get: {
+        summary: 'Périodes de congés : statut, révision, clôtures, empreinte active',
+        security: bearer,
+        responses: { '200': { description: '{ items }' } },
+      },
+    },
+    '/leave/periods/{id}/preclose': {
+      get: {
+        summary: 'Contrôle de PRÉ-CLÔTURE congés : bloquants et avertissements exhaustifs (demandes en attente, applications en échec, soldes négatifs interdits, absences non intégrées, périodes E10 ouvertes, paramètres non résolus…)',
+        security: bearer,
+        responses: { '200': { description: '{ preclose: { blocking, warnings } }' } },
+      },
+    },
+    '/leave/periods/{id}/close': {
+      post: {
+        summary: 'Clôturer (leave.close_run) : photographie FIGÉE du ledger, empreinte SHA-256 reproductible, avertissements à CONFIRMER, clôtures concurrentes exclues',
+        security: bearer,
+        responses: { '200': { description: '{ closeId, closeNo, fingerprint, linesCount, warnings }' }, '409': err('Bloquants ou période déjà close') },
+      },
+    },
+    '/leave/periods/{id}/reopen': {
+      post: {
+        summary: 'Réouverture par CIRCUIT dédié (leave.reopen, motif obligatoire) — la clôture et les exports antérieurs DEMEURENT',
+        security: bearer,
+        responses: { '200': { description: '{ instanceId }' }, '409': err('Aucun circuit actif / statut inadapté') },
+      },
+    },
+    '/leave/periods/{id}/closes': {
+      get: {
+        summary: 'Historique des clôtures d’une période (numéros, empreintes, totaux, statuts)',
+        security: bearer,
+        responses: { '200': { description: '{ items }' } },
+      },
+    },
+    '/leave/closes/{id}/verify': {
+      get: {
+        summary: 'Vérifier une clôture : l’empreinte se RECALCULE depuis les lignes figées — identique ou alerte',
+        security: bearer,
+        responses: { '200': { description: '{ stored, recomputed, match }' } },
+      },
+    },
+    '/leave/closes/{id}/exports': {
+      post: {
+        summary: 'Générer l’export préparatoire paie (leave.export_create) : kora-conges-prep-1, CSV/JSON, AUCUN montant (garde par construction), idempotent (même contenu ⇒ réutilisé), remplacement versionné',
+        security: bearer,
+        responses: { '201': { description: '{ exportId, revision, sha256, reused }' } },
+      },
+      get: {
+        summary: 'Exports d’une clôture (révisions, empreintes, clôtures E10 référencées, statuts)',
+        security: bearer,
+        responses: { '200': { description: '{ items }' } },
+      },
+    },
+    '/leave/prep-exports/{id}/download': {
+      get: {
+        summary: 'Télécharger un export préparatoire (leave.export_download) — chaque téléchargement audité ; le contenu transmis ne change JAMAIS',
+        security: bearer,
+        responses: { '200': { description: '{ filename, format, contentBase64, sha256 }' } },
+      },
+    },
+    '/leave/integration': {
+      get: {
+        summary: 'Suivi de l’intégration présence : faits par statut, impacts par absence, en attente de réouverture E10',
+        security: bearer,
+        responses: { '200': { description: '{ integration: { facts, impacts, pending } }' } },
+      },
+    },
+    '/leave/integration/run': {
+      post: {
+        summary: 'Reprise EXPLICITE de l’intégration (leave.integration_run) : activation des faits en attente (période E10 rouverte), recalculs motivés idempotents, anomalies expliquées résolues',
+        security: bearer,
+        responses: { '200': { description: '{ activated, integrated, recalculated, resolvedAnomalies, stillPending }' } },
+      },
+    },
+    '/leave/reports': {
+      get: {
+        summary: 'Indicateurs congés & absences (leave.reports_view, portée réelle) : soldes, taux d’utilisation, demandes, délais, catégories, unités, rétroactives, échecs, exposition au report — JAMAIS un motif médical',
+        security: bearer,
+        responses: { '200': { description: '{ report }' } },
+      },
+    },
     '/openapi.json': {
       get: { summary: 'Cette spécification', responses: { '200': { description: 'OpenAPI 3.0.3' } } },
     },

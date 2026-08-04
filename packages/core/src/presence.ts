@@ -101,6 +101,20 @@ export interface DayCorrections {
   appliedCount: number;
 }
 
+/**
+ * Fait d'absence APPROUVÉE (E11.3) consommé par le moteur : catégorie paie
+ * préparatoire (catalogue fermé), portion du jour (pleine, demi, heures).
+ * Le fait vit sur SA journée de travail (la rotation de nuit y est déjà
+ * rattachée par le décompte E11) — le moteur n'invente ni ne déplace rien.
+ */
+export interface DayAbsence {
+  category: string;
+  code: string;
+  paid: boolean;
+  portion: 'full' | 'half' | 'hours';
+  minutes?: number | null;
+}
+
 export interface ComputeDayInput {
   planned: PlannedDay | null;           // null = aucun horaire applicable
   holiday: boolean;
@@ -110,6 +124,8 @@ export interface ComputeDayInput {
   /** Des événements NON APPARIÉS du jour existent encore (résolution incertaine). */
   hasPendingUnmatched?: boolean;
   corrections?: DayCorrections;
+  /** Faits d'absence APPROUVÉS couvrant la journée (E11.3) — au plus un vivant. */
+  absences?: DayAbsence[];
 }
 
 export interface WorkPeriod { startMinute: number; endMinute: number }
@@ -303,7 +319,39 @@ function applyJustifications(out: DayComputation, corrections: DayCorrections | 
 }
 
 export function computeDay(input: ComputeDayInput): DayComputation {
-  return applyJustifications(computeDayFacts(input), input.corrections);
+  return applyJustifications(applyAbsences(computeDayFacts(input), input), input.corrections);
+}
+
+/**
+ * Application d'un fait d'absence APPROUVÉE (E11.3), AVANT les justifications
+ * correctives (première qualification gagne — documenté) :
+ *  - la portion autorisée se convertit en minutes PLANIFIÉES (pleine journée,
+ *    demi-journée arrondie, volume d'heures borné à la journée) ;
+ *  - les minutes justifiées sont BORNÉES au manque MESURÉ — une absence
+ *    approuvée n'invente jamais une minute, ne modifie jamais un pointage ;
+ *  - le statut du jour ne change pas : une absence justifiée RESTE une absence
+ *    (la paie décidera de l'effet financier — module ultérieur).
+ */
+function applyAbsences(out: DayComputation, input: ComputeDayInput): DayComputation {
+  const fact = (input.absences ?? [])[0];
+  if (!fact) return out;
+  const p = input.planned;
+  const plannedWork = p !== null && !p.isRest && p.startMinute !== null && p.endMinute !== null
+    ? (p.endMinute - p.startMinute)
+      - (p.breakStartMinute !== null && p.breakEndMinute !== null && p.breakEndMinute > p.breakStartMinute
+        ? p.breakEndMinute - p.breakStartMinute : 0)
+    : 0;
+  const portionMinutes = fact.portion === 'full'
+    ? plannedWork
+    : fact.portion === 'half'
+      ? Math.round(plannedWork / 2)
+      : Math.min(plannedWork, Math.max(0, Math.round(fact.minutes ?? 0)));
+  const justified = Math.min(portionMinutes, out.absenceMinutes);
+  if (out.justifiedCategory === null && justified > 0) {
+    out.justifiedCategory = fact.category;
+    out.justifiedMinutes = justified;
+  }
+  return out;
 }
 
 function computeDayFacts(input: ComputeDayInput): DayComputation {

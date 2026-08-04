@@ -507,10 +507,14 @@ test('06 circuit manager → RH : instruction, approbation liée à la version, 
   assert.equal(step1.status, 'approved');
   assert.equal(step1.applied, true);
   assert.equal(psql(`SELECT status FROM leave.requests WHERE id = '${reqE1Sept}'`), 'applied');
-  // Absence opposable : UNE par version, impact présence DIFFÉRÉ (E11.3), politique et paramètres CONSERVÉS.
+  // Absence opposable : UNE par version, politique et paramètres CONSERVÉS. Depuis
+  // E11.3, l'application pose les FAITS et déclenche le recalcul E10 motivé :
+  // l'impact présence est APPLIQUÉ (aucune période E10 close ne couvre septembre).
   const abs = psql(`SELECT status || '|' || presence_impact || '|' || quantity || '|' || (policy_version IS NOT NULL)
     FROM leave.absences WHERE request_id = '${reqE1Sept}' AND request_version = 1`);
-  assert.equal(abs, 'approved|deferred|4.000|true'); // bool||text psql ⇒ 'true' (leçon CI 30805563415)
+  assert.equal(abs, 'approved|applied|4.000|true'); // bool||text psql ⇒ 'true' (leçon CI 30805563415)
+  assert.equal(psql(`SELECT count(*) FROM time.absence_facts f JOIN leave.absences a ON a.id = f.absence_id
+    WHERE a.request_id = '${reqE1Sept}' AND f.status = 'active'`), '4', 'un fait par journée décomptée');
   // Ledger : consommation 4 + libération de la réservation — le solde est une SOMME, jamais une retouche.
   assert.equal(ledgerCount(`request_id = '${reqE1Sept}' AND entry_kind = 'consumption'`), 1);
   assert.equal(ledgerCount(`request_id = '${reqE1Sept}' AND entry_kind = 'release'`), 1);
@@ -706,8 +710,9 @@ test('12 rétroactif sur période CLOSE : constat EXPLICITE, circuit dédié, AU
   const dayResultsBefore = psql(`SELECT count(*) FROM time.day_results WHERE tenant_id = '${tenantAId}'`);
   await postJson(`/leave/requests/${reqRetro}/submit`, self, undefined);
   await postJson(`/leave/requests/${reqRetro}/decide`, rhq2, { action: 'approve' });
-  // L'absence EXISTE (impact présence DIFFÉRÉ) ; la clôture E10 n'a pas bougé d'un octet.
-  assert.equal(psql(`SELECT status || '|' || presence_impact FROM leave.absences WHERE request_id = '${reqRetro}'`), 'approved|deferred');
+  // L'absence EXISTE, son impact est EN ATTENTE (période E10 close — E11.3) ;
+  // la clôture E10 n'a pas bougé d'un octet et AUCUN recalcul n'a couru.
+  assert.equal(psql(`SELECT status || '|' || presence_impact FROM leave.absences WHERE request_id = '${reqRetro}'`), 'approved|pending_closed_period');
   assert.equal(psql(`SELECT status FROM time.periods WHERE tenant_id = '${tenantAId}' AND label = 'Juillet 2026'`), 'closed');
   assert.equal(psql(`SELECT count(*) FROM time.day_results WHERE tenant_id = '${tenantAId}'`), dayResultsBefore);
   // La version soumise CONSERVE le constat (opposable).

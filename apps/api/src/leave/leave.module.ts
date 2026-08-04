@@ -15,12 +15,15 @@ import { LeaveCatalogService } from './catalog.service';
 import { LeaveAccrualService } from './accrual.service';
 import { LeaveBalancesService } from './balances.service';
 import { LeaveRequestsService } from './requests.service';
+import { LeaveIntegrationService } from './integration.service';
+import { LeaveCloseService } from './close.service';
 import { LeaveController } from './leave.controller';
 import { LeaveRequestsController } from './requests.controller';
+import { LeaveCloseController } from './close.controller';
 
 @Module({
   imports: [AuthModule, RbacModule, NotifyModule, WorkflowModule, TimeModule],
-  providers: [LeaveCatalogService, LeaveAccrualService, LeaveBalancesService, LeaveRequestsService],
-  controllers: [LeaveController, LeaveRequestsController],
+  providers: [LeaveCatalogService, LeaveAccrualService, LeaveBalancesService, LeaveRequestsService, LeaveIntegrationService, LeaveCloseService],
+  controllers: [LeaveController, LeaveRequestsController, LeaveCloseController],
 })
 export class LeaveModule {}

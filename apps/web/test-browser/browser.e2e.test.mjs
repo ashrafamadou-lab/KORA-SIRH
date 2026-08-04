@@ -65,6 +65,8 @@ const leaveAdmEmail = `pwa.ladm.${rid}@demo.bj`;
 const lrEssEmail = `pwa.lress.${rid}@demo.bj`;
 const lrMgrEmail = `pwa.lrmgr.${rid}@demo.bj`;
 const lrRhEmail = `pwa.lrrh.${rid}@demo.bj`;
+// E11.3 — identité DÉDIÉE clôture congés / intégration présence / rapports.
+const lcAdmEmail = `pwa.lcadm.${rid}@demo.bj`;
 
 let app = null;
 let webServer = null;
@@ -193,6 +195,8 @@ before(async (tc) => {
     // E11.2 : configuration des circuits de demandes + horaires du salarié de test.
     'workflow.manage', 'time.schedules_manage', 'time.schedules_assign']);
   const lrEssUserId = await seedUser(lrEssEmail, ['leave.request_self', 'leave.requests_view_own', 'leave.balance_view_own']);
+  await seedUser(lcAdmEmail, ['leave.period_manage', 'leave.close_run', 'leave.close_view', 'leave.reopen',
+    'leave.export_create', 'leave.export_download', 'leave.reports_view', 'leave.integration_run']);
   const lrMgrUserId = await seedUser(lrMgrEmail, ['leave.requests_view_team', 'workflow.view', 'workflow.act']);
   const lrRhRole = psql(`INSERT INTO admin.roles (tenant_id, key, name) VALUES ('${tenantId}','pw-rh-conges','RH congés PW') RETURNING id`);
   const lrRhUserId = psql(`INSERT INTO admin.users (tenant_id, email, password_hash) VALUES ('${tenantId}','${lrRhEmail}', (SELECT password_hash FROM admin.users WHERE email = '${lrEssEmail}')) RETURNING id`);
@@ -1124,13 +1128,15 @@ test('CONGÉS (E11.2) : demande ESS de bout en bout — prévisualisation serveu
       && (document.body.textContent ?? '').includes('REQ'));
   });
   await ctx3.close();
-  // Application : UNE consommation + UNE libération, l'absence est opposable, impact présence DIFFÉRÉ.
+  // Application : UNE consommation + UNE libération, l'absence est opposable ;
+  // depuis E11.3, les FAITS sont posés et le recalcul E10 motivé court aussitôt
+  // (aucune période E10 close sur septembre) : impact présence APPLIQUÉ.
   assert.equal(psql(`SELECT count(*) FROM leave.entitlement_ledger
     WHERE tenant_id = '${tenantId}' AND request_id = '${reqId}' AND entry_kind = 'consumption'`), '1');
   assert.equal(psql(`SELECT count(*) FROM leave.entitlement_ledger
     WHERE tenant_id = '${tenantId}' AND request_id = '${reqId}' AND entry_kind = 'release'`), '1');
   assert.equal(psql(`SELECT status || '|' || presence_impact FROM leave.absences
-    WHERE tenant_id = '${tenantId}' AND request_id = '${reqId}'`), 'approved|deferred');
+    WHERE tenant_id = '${tenantId}' AND request_id = '${reqId}'`), 'approved|applied');
 
   // 4. HORS LIGNE (contexte ESS conservé) : AUCUNE demande ni donnée individuelle ne survit.
   await shot(page, 'lr-offline', async () => {
@@ -1184,6 +1190,148 @@ test('CONGÉS (E11.2) : RBAC — sans permission, ni menus de demandes, ni API (
     assert.equal(statuses.team, 403, 'équipe : 403');
     assert.equal(statuses.queue, 403, 'file RH : 403');
     assert.equal(statuses.calendar, 403, 'calendrier : 403');
+  });
+  await ctx.close();
+});
+
+test('CONGÉS (E11.3) : intégration présence VISIBLE, clôture à empreinte VÉRIFIÉE, export SANS montant, rapports — HORS LIGNE rien ne survit', { skip: !RUNNABLE }, async () => {
+  // Pré-état (test E11.2) : l'absence REQ de PW-0003 (07–11/09) est APPLIQUÉE et
+  // INTÉGRÉE — faits actifs posés, recalcul E10 motivé passé, journées qualifiées.
+  assert.equal(psql(`SELECT count(*) FROM time.absence_facts f
+    WHERE f.tenant_id = '${tenantId}' AND f.employee_id = '${hr.e3}' AND f.status = 'active'`), '5');
+  assert.equal(psql(`SELECT count(*) FROM time.day_results r
+    WHERE r.tenant_id = '${tenantId}' AND r.employee_id = '${hr.e3}' AND r.is_current
+      AND r.work_date BETWEEN '2026-09-07' AND '2026-09-11' AND r.justified_category IS NOT NULL`), '5',
+  'le REGISTRE de présence porte la qualification issue de l’absence');
+
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await ctx.newPage();
+  await shot(page, 'lc-integration', async () => {
+    await login(page, lcAdmEmail);
+    // 1. Intégration présence : compteurs réels de la fenêtre de septembre.
+    await page.click('a[href="#/leave/integration"]');
+    await page.waitForFunction(() => document.querySelectorAll('input[type="date"]').length >= 2);
+    await page.locator('input[type="date"]').nth(0).fill('2026-09-01');
+    await page.locator('input[type="date"]').nth(1).fill('2026-09-30');
+    await page.click('button:has-text("Rechercher")');
+    await page.waitForFunction(() => (document.body.textContent ?? '').includes('Actifs'));
+    const b1 = await page.evaluate(() => document.body.textContent ?? '');
+    assert.ok(b1.includes('Appliqué'), 'les impacts par statut se montrent');
+    // Reprise IDEMPOTENTE : zéro nouvel effet sur un état déjà intégré.
+    const resultsBefore = psql(`SELECT count(*) FROM time.day_results WHERE tenant_id = '${tenantId}'`);
+    await page.click('button:has-text("Reprendre l’intégration")');
+    await page.waitForFunction(() => (document.body.textContent ?? '').includes('Reprise :'));
+    assert.equal(psql(`SELECT count(*) FROM time.day_results WHERE tenant_id = '${tenantId}'`), resultsBefore,
+      'reprise sur état intégré = AUCUNE nouvelle version de résultat');
+  });
+
+  await shot(page, 'lc-close', async () => {
+    // 2. Période de congés créée puis CLOSE via l'interface (avertissements confirmés).
+    await page.click('a[href="#/leave/periods"]');
+    await page.waitForFunction(() => document.querySelectorAll('form input[type="date"]').length >= 2);
+    await page.fill('form input:not([type="date"])', `Septembre congés ${rid}`);
+    await page.locator('form input[type="date"]').nth(0).fill('2026-09-01');
+    await page.locator('form input[type="date"]').nth(1).fill('2026-09-30');
+    await page.click('button:has-text("Créer la période")');
+    await page.waitForFunction(() => (document.body.textContent ?? '').includes('Ouverte'));
+    await page.click('button:has-text("Pré-clôture")');
+    await page.waitForFunction(() => (document.body.textContent ?? '').includes('Pré-clôture'));
+    await page.click('label:has-text("Je confirme les avertissements") input');
+    await page.click('button:has-text("Clore la période")');
+    await page.waitForFunction(() => (document.body.textContent ?? '').includes('Close'));
+    const closeRow = psql(`SELECT c.dataset_sha256 || '|' || c.status FROM leave.period_closes c
+      JOIN leave.periods p ON p.id = c.period_id WHERE p.tenant_id = '${tenantId}'`).split('|');
+    assert.equal(closeRow[0].length, 64, 'empreinte SHA-256 portée par la clôture');
+    assert.equal(closeRow[1], 'active');
+    // Mouvement rétroactif ORDINAIRE dans la période close : refus PAR LA BASE.
+    const typeId = psql(`SELECT id FROM leave.absence_types WHERE tenant_id = '${tenantId}' AND code = 'REQ'`);
+    const refused = spawnSync('psql', [MIGRATOR_URL, '-qXtA', '-v', 'ON_ERROR_STOP=1', '-c',
+      `INSERT INTO leave.entitlement_ledger (tenant_id, employee_id, absence_type_id, reference_period_start,
+        reference_period_end, entry_kind, quantity, unit, effective_on, origin, reason, idempotency_key, created_by)
+       VALUES ('${tenantId}','${hr.e3}','${typeId}','2026-01-01','2026-12-31','grant',1,'open_days',
+        '2026-09-15','admin','tentative rétroactive','pw-retro-${rid}',
+        (SELECT id FROM admin.users WHERE email = '${lcAdmEmail}'))`], { encoding: 'utf8' });
+    assert.notEqual(refused.status, 0, 'période de congés close : mouvement rétroactif REFUSÉ par le garde SQL');
+
+    // 3. Empreinte VÉRIFIÉE depuis les lignes figées + export préparatoire SANS montant.
+    await page.click('button:has-text("Voir les clôtures")');
+    await page.waitForFunction(() => (document.body.textContent ?? '').includes('kora-leave-close-1.0.0'));
+    await page.click('button:has-text("Vérifier l’empreinte")');
+    await page.waitForFunction(() => (document.body.textContent ?? '').includes('identique'));
+    await page.click('button:has-text("Générer CSV")');
+    await page.waitForFunction(() => (document.body.textContent ?? '').includes('kora-conges-prep-1'));
+    const exp = psql(`SELECT convert_from(content, 'UTF8') FROM leave.prep_exports WHERE tenant_id = '${tenantId}'`);
+    assert.ok(exp.includes('module;origine;matricule;categorie;jours;heures;corrections'), 'schéma CSV kora-conges-prep-1');
+    assert.ok(exp.includes('PW-0003'), 'les volumes du salarié intégré sont exportés');
+    assert.ok(!/montant|salaire|taux|net|brut|retenue/i.test(exp), 'JAMAIS un montant, un taux ni un salaire dans l’export');
+    // Régénération : contenu identique ⇒ export RÉUTILISÉ (idempotence).
+    await page.click('button:has-text("Générer CSV")');
+    await page.waitForFunction(() => (document.body.textContent ?? '').includes('réutilisé'));
+    assert.equal(psql(`SELECT count(*) FROM leave.prep_exports WHERE tenant_id = '${tenantId}'`), '1');
+  });
+
+  await shot(page, 'lc-reports', async () => {
+    // 4. Rapports agrégés : catégories, entonnoir — jamais un motif.
+    await page.click('a[href="#/leave/reports"]');
+    await page.waitForFunction(() => document.querySelectorAll('input[type="date"]').length >= 2);
+    await page.locator('input[type="date"]').nth(0).fill('2026-01-01');
+    await page.locator('input[type="date"]').nth(1).fill('2026-09-30');
+    await page.click('button:has-text("Rechercher")');
+    await page.waitForFunction(() => (document.body.textContent ?? '').includes('Soldes agrégés'));
+    const b4 = await page.evaluate(() => document.body.textContent ?? '');
+    assert.ok(b4.includes('Entonnoir des demandes'), 'entonnoir des demandes visible');
+    assert.ok(b4.includes('Absences par catégorie'), 'catégories préparatoires visibles');
+  });
+
+  // 5. HORS LIGNE : ni clôture, ni export, ni rapport, ni donnée individuelle.
+  await shot(page, 'lc-offline', async () => {
+    await ctx.setOffline(true);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#app');
+    const report = await storageReport(page);
+    assert.deepEqual(report.cacheApiEntries, [], 'AUCUNE réponse /api en Cache Storage');
+    assert.ok(!report.bodyText.includes('PW-0003'), 'aucun matricule hors ligne');
+    assert.ok(!report.bodyText.includes('kora-conges-prep-1'), 'aucun export hors ligne');
+    const offline = await page.evaluate(async () => {
+      try {
+        const r = await fetch('/api/v1/leave/periods');
+        return `status:${r.status}`;
+      } catch {
+        return 'network-error';
+      }
+    });
+    assert.equal(offline, 'network-error', 'les clôtures ne répondent JAMAIS depuis un cache');
+    await ctx.setOffline(false);
+  });
+  await ctx.close();
+});
+
+test('CONGÉS (E11.3) : RBAC — sans permission, ni menus de clôture, ni API (le serveur tranche)', { skip: !RUNNABLE }, async () => {
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await ctx.newPage();
+  await shot(page, 'lc-rbac', async () => {
+    await login(page, viewerEmail); // employees.view SEUL
+    for (const href of ['#/leave/periods', '#/leave/integration', '#/leave/reports']) {
+      const has = await page.evaluate((s) => document.querySelector(`a[href="${s}"]`) !== null, href);
+      assert.equal(has, false, `menu ${href} absent sans permission`);
+    }
+    await page.goto(`${BASE}/#/leave/periods`);
+    await page.waitForFunction(() =>
+      (document.body.textContent ?? '').includes('Accès refusé')
+      || (document.body.textContent ?? '').includes('Access denied'));
+    const statuses = await page.evaluate(async () => ({
+      periods: (await fetch('/api/v1/leave/periods')).status,
+      integration: (await fetch('/api/v1/leave/integration?from=2026-09-01&to=2026-09-30')).status,
+      reports: (await fetch('/api/v1/leave/reports?from=2026-01-01&to=2026-09-30')).status,
+      run: (await fetch('/api/v1/leave/integration/run', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ from: '2026-09-01', to: '2026-09-30' }),
+      })).status,
+    }));
+    assert.equal(statuses.periods, 403, 'périodes : 403');
+    assert.equal(statuses.integration, 403, 'intégration : 403');
+    assert.equal(statuses.reports, 403, 'rapports : 403');
+    assert.ok([400, 403].includes(statuses.run), `reprise refusée (CSRF/permission), jamais 2xx : ${statuses.run}`);
   });
   await ctx.close();
 });

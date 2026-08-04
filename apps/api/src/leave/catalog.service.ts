@@ -11,6 +11,7 @@ import { auditAuth } from '../auth/audit.util';
 import {
   DATE_RE, OPERATING_COUNTRY, holdsPermission, numericParam, paramsAt, pgCode, type TimeOutcome,
 } from './leave-access';
+import { PREP_CATEGORIES, isPrepCategory } from '../../../../packages/core/src/leave-close.ts';
 
 const CODE_RE = /^[A-Z0-9][A-Z0-9_-]{1,29}$/;
 const UNITS = ['open_days', 'working_days', 'calendar_days', 'half_days', 'hours'];
@@ -24,6 +25,8 @@ export interface TypeInput {
   retroactiveAllowed?: boolean; negativeAllowed?: boolean; confidential?: boolean;
   retentionNote?: string | null; workflowRequired?: boolean;
   effectiveFrom?: string;
+  /** Catégorie préparatoire paie (E11.3) — catalogue FERMÉ, figée dès le premier usage. */
+  prepCategory?: string;
 }
 
 export interface PolicyVersionInput {
@@ -70,6 +73,7 @@ export class LeaveCatalogService {
                t.justification, t.deposit_delay_days AS "depositDelayDays",
                t.retroactive_allowed AS "retroactiveAllowed", t.negative_allowed AS "negativeAllowed",
                t.confidential, t.workflow_required AS "workflowRequired", t.status,
+               t.prep_category AS "prepCategory",
                t.effective_from::text AS "effectiveFrom", t.effective_to::text AS "effectiveTo",
                (SELECT count(*)::int FROM leave.policies p WHERE p.absence_type_id = t.id) AS "policyCount",
                EXISTS (SELECT 1 FROM leave.entitlement_ledger l WHERE l.absence_type_id = t.id) AS "used"
@@ -90,13 +94,14 @@ export class LeaveCatalogService {
           INSERT INTO leave.absence_types
             (tenant_id, code, label_fr, label_en, category, paid, unit, affects_presence, affects_payroll_prep,
              justification, deposit_delay_days, retroactive_allowed, negative_allowed, confidential,
-             retention_note, workflow_required, effective_from, created_by)
+             retention_note, workflow_required, effective_from, created_by, prep_category)
           VALUES (${tenantId}::uuid, ${input.code}, ${input.labelFr}, ${input.labelEn}, ${input.category},
                   ${input.paid}, ${input.unit}, ${input.affectsPresence ?? true}, ${input.affectsPayrollPrep ?? true},
                   ${input.justification ?? 'none'}, ${input.depositDelayDays ?? null},
                   ${input.retroactiveAllowed ?? false}, ${input.negativeAllowed ?? false}, ${input.confidential ?? false},
                   ${input.retentionNote ?? null}, ${input.workflowRequired ?? true},
-                  ${input.effectiveFrom ?? new Date().toISOString().slice(0, 10)}::date, ${actor}::uuid)
+                  ${input.effectiveFrom ?? new Date().toISOString().slice(0, 10)}::date, ${actor}::uuid,
+                  ${input.prepCategory ?? 'autre'})
           RETURNING id`;
         await auditAuth(tx, tenantId, {
           action: 'leave_type_created', actorUserId: actor, module: 'leave',
@@ -115,10 +120,13 @@ export class LeaveCatalogService {
   /** Mise à jour BORNÉE : libellés, statut, dates, notes — la sémantique est gardée par la base. */
   async updateType(
     tenantId: string, actor: string, typeId: string,
-    input: Partial<Pick<TypeInput, 'labelFr' | 'labelEn' | 'retentionNote' | 'depositDelayDays' | 'justification' | 'workflowRequired' | 'retroactiveAllowed'>> & { status?: string; effectiveTo?: string | null },
+    input: Partial<Pick<TypeInput, 'labelFr' | 'labelEn' | 'retentionNote' | 'depositDelayDays' | 'justification' | 'workflowRequired' | 'retroactiveAllowed' | 'prepCategory'>> & { status?: string; effectiveTo?: string | null },
   ): Promise<TimeOutcome<{ updated: boolean }>> {
     if (input.status !== undefined && !['draft', 'active', 'inactive', 'archived'].includes(input.status)) {
       return { kind: 'invalid', reason: 'status : draft, active, inactive ou archived' };
+    }
+    if (input.prepCategory !== undefined && !isPrepCategory(input.prepCategory)) {
+      return { kind: 'invalid', reason: `prepCategory : ${PREP_CATEGORIES.join(', ')}` };
     }
     return this.prisma.withTenant(tenantId, async (tx) => {
       if (!(await holdsPermission(tx, actor, 'leave.types_admin'))) {
@@ -137,6 +145,7 @@ export class LeaveCatalogService {
             justification = coalesce(${input.justification ?? null}, justification),
             workflow_required = coalesce(${input.workflowRequired ?? null}, workflow_required),
             retroactive_allowed = coalesce(${input.retroactiveAllowed ?? null}, retroactive_allowed),
+            prep_category = coalesce(${input.prepCategory ?? null}, prep_category),
             status = coalesce(${input.status ?? null}, status),
             effective_to = coalesce(${input.effectiveTo ?? null}::date, effective_to)
           WHERE id = ${typeId}::uuid`;
@@ -159,6 +168,9 @@ export class LeaveCatalogService {
     if (typeof input.paid !== 'boolean') return 'paid : booléen requis';
     if (input.justification !== undefined && !['required', 'optional', 'none'].includes(input.justification)) {
       return 'justification : required, optional ou none';
+    }
+    if (input.prepCategory !== undefined && !isPrepCategory(input.prepCategory)) {
+      return `prepCategory : ${PREP_CATEGORIES.join(', ')}`;
     }
     return null;
   }

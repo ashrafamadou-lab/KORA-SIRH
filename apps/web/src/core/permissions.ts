@@ -76,6 +76,9 @@ export const NAV_MAP: NavSection[] = [
       { route: '/leave/balances', labelKey: 'nav.leaveBalances', anyOf: ['leave.balance_view', 'leave.balance_view_team'], icon: 'people' },
       { route: '/leave/catalog', labelKey: 'nav.leaveCatalog', anyOf: ['leave.types_admin', 'leave.policies_admin', 'leave.accrual_run'], icon: 'sliders' },
       { route: '/leave/runs', labelKey: 'nav.leaveRuns', anyOf: ['leave.accrual_run', 'leave.openings_import'], icon: 'layers' },
+      { route: '/leave/integration', labelKey: 'nav.leaveIntegration', anyOf: ['leave.integration_run', 'leave.close_run', 'leave.close_view'], icon: 'clock' },
+      { route: '/leave/periods', labelKey: 'nav.leavePeriods', anyOf: ['leave.period_manage', 'leave.close_run', 'leave.close_view', 'leave.reopen'], icon: 'calendar' },
+      { route: '/leave/reports', labelKey: 'nav.leaveReports', anyOf: ['leave.reports_view'], icon: 'chart' },
     ],
   },
   {

@@ -34,6 +34,7 @@ import {
   PRESENCE_ENGINE_VERSION,
   PRESENCE_PARAM_KEYS,
   type ComputeDayInput,
+  type DayAbsence,
   type DayComputation,
   type DayJustification,
   type EmploymentContext,
@@ -111,6 +112,8 @@ interface EmployeeContextBundle {
   pinned: Map<string, Array<{ id: string; localMinute: number; type: 'in' | 'out'; siteId: string | null }>>;
   justifications: Map<string, DayJustification[]>;
   correctionsCount: Map<string, number>;
+  /** Faits d'absence APPROUVÉS et ACTIFS (E11.3) — au plus un vivant par journée. */
+  absenceFacts: Map<string, DayAbsence>;
 }
 
 interface DayEvaluation {
@@ -503,7 +506,24 @@ export class CalcService {
       pendingDates: new Set(pendingRows.map((r) => r.local_date)),
       consumed: new Set<string>(),
       pinned: new Map(), justifications: new Map(), correctionsCount: new Map(),
+      absenceFacts: new Map(),
     };
+    // Faits d'absence APPROUVÉS (E11.3) : le moteur les CONSOMME — il ne touche
+    // ni les pointages bruts, ni les demandes, ni le ledger, ni les clôtures.
+    const factRows = await tx.$queryRaw<Array<{
+      work_date: string; prep_category: string; type_code: string; paid: boolean;
+      portion: string; minutes: number | null;
+    }>>`
+      SELECT work_date::text, prep_category, type_code, paid, portion, minutes
+        FROM time.absence_facts
+       WHERE employee_id = ${employeeId}::uuid AND status = 'active'
+         AND work_date BETWEEN ${periodStart}::date AND ${periodEnd}::date`;
+    for (const f of factRows) {
+      ctx.absenceFacts.set(f.work_date, {
+        category: f.prep_category, code: f.type_code, paid: f.paid,
+        portion: f.portion as DayAbsence['portion'], minutes: f.minutes,
+      });
+    }
     // Surcouche corrective APPROUVÉE (E10.3) — appliquée AVANT l'appariement, dans
     // l'ordre de création (déterministe) : exclusions, retypages, sites corrigés,
     // rattachements forcés, événements ajoutés (épinglés), justifications.
@@ -799,6 +819,7 @@ export class CalcService {
           justifications: ctx.justifications.get(date) ?? [],
           appliedCount: ctx.correctionsCount.get(date) ?? 0,
         },
+        absences: ctx.absenceFacts.has(date) ? [ctx.absenceFacts.get(date)!] : [],
       };
       const computation = computeDay(input);
       // Événements du JOUR CIVIL hors de TOUTE fenêtre d'appariement (veille, jour,

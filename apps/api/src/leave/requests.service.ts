@@ -22,6 +22,7 @@ import { NotificationService } from '../notify/notification.service';
 import { WorkflowService, type ActorIdentity } from '../workflow/workflow.service';
 import { LeaveCatalogService } from './catalog.service';
 import { LeaveBalancesService } from './balances.service';
+import { LeaveIntegrationService } from './integration.service';
 import {
   DATE_RE, holdsPermission, scopeSetFor, type ScopeSet, type TimeOutcome,
   linkedEmployee, teamEmployeeIds, paramsAt, numericParam, pgCode,
@@ -66,6 +67,7 @@ export class LeaveRequestsService {
     private readonly wf: WorkflowService,
     private readonly catalog: LeaveCatalogService,
     private readonly balances: LeaveBalancesService,
+    private readonly integration: LeaveIntegrationService,
   ) {
     // Pont E3 → demande : la DÉCISION évolue dans la même transaction ; toute
     // APPLICATION (mouvements + absence) reste hors décision — son échec ne
@@ -748,10 +750,15 @@ export class LeaveRequestsService {
             ON CONFLICT (tenant_id, idempotency_key) DO NOTHING`;
           await this.releaseReservation(tx, tenantId, req, v.version, 'applied', actor);
         }
+        // Faits d'absence (E11.3) : posés DANS la même transaction — période E10
+        // verrouillée/close ⇒ EN ATTENTE, jamais un impact automatique sur une clôture.
+        const facts = await this.integration.postFactsTx(tx, tenantId, actor, absenceId);
         await tx.$executeRaw`
           UPDATE leave.requests SET status = 'applied'
            WHERE id = ${requestId}::uuid AND status IN ('approved_pending_application', 'approved', 'application_failed')`;
-        await this.event(tx, tenantId, requestId, v.version, 'applied', actor, { absenceId, quantity: qty });
+        await this.event(tx, tenantId, requestId, v.version, 'applied', actor, {
+          absenceId, quantity: qty, factsPosted: facts.posted, presencePending: facts.pending,
+        });
         const recipients = await this.stakeholders(tx, req);
         await this.notifyUsers(tx, tenantId, actor, recipients, `conges-demande-appliquee-${requestId}-v${v.version}`,
           'conges_demande_appliquee', { demande: requestId, quantite: String(qty) });
@@ -771,6 +778,11 @@ export class LeaveRequestsService {
         throw e;
       }
     });
+    if (step.kind === 'ok') {
+      // Recalcul E10 MOTIVÉ hors transaction d'application : son échec ne remet
+      // JAMAIS l'application en cause (impact différé, reprise explicite).
+      await this.integration.integrateAbsence(tenantId, actor, step.absenceId).catch(() => undefined);
+    }
     if (step.kind === 'already') return { kind: 'ok', absenceId: step.absenceId };
     if (step.kind === 'apply_failed') {
       await this.prisma.withTenant(tenantId, async (tx) => {
@@ -934,6 +946,11 @@ export class LeaveRequestsService {
           ${'annulation demande ' + requestId + ' v' + v}, ${reason.slice(0, 490)},
           ${cancellationReversalKey(requestId, v)}, ${cons[0].id}::uuid, ${requestId}::uuid, ${v})
         ON CONFLICT (tenant_id, idempotency_key) DO NOTHING`;
+    }
+    const absRow = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM leave.absences WHERE request_id = ${requestId}::uuid AND request_version = ${v}`;
+    if (absRow[0]) {
+      await this.integration.supersedeFactsTx(tx, tenantId, absRow[0].id, reason);
     }
     await tx.$executeRaw`
       UPDATE leave.requests SET status = 'cancelled', cancel_workflow_instance_id = NULL
