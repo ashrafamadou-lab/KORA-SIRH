@@ -48,7 +48,10 @@ export type CondNode =
 const VALUE_BINARY = new Set(['add', 'sub', 'mul', 'div', 'min', 'max']);
 const COND_COMPARE = new Set(['lt', 'lte', 'gt', 'gte', 'eq', 'ne']);
 const VAR_RE = /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*$/;
-const PARAM_KEY_RE = /^[a-z0-9]+(\.[a-z0-9_]+)+$/;
+// Une clé E4 COMMENCE par une lettre. Sans cette exigence, « 0.036 » satisferait
+// le motif et un taux écrit en dur passerait pour une clé de paramètre : la règle
+// « aucune valeur légale dans le moteur » serait contournée par la forme.
+const PARAM_KEY_RE = /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$/;
 const MAX_DEPTH = 24;
 
 /** Lecture SÛRE d'une propriété : jamais une propriété héritée du prototype. */

@@ -24,7 +24,9 @@ import {
 type Tx = Prisma.TransactionClient;
 
 const CODE_RE = /^[A-Z0-9][A-Z0-9_-]{1,29}$/;
-const PARAM_KEY_RE = /^[a-z0-9]+(\.[a-z0-9_]+)+$/;
+// Clé E4 : commence par une LETTRE. « 0.036 » n'est pas une clé, c'est un taux
+// écrit en dur — il doit être refusé par la forme même.
+const PARAM_KEY_RE = /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$/;
 const KINDS = ['gain', 'prime', 'indemnite', 'avantage', 'retenue'];
 
 export interface RubricVersionInput {

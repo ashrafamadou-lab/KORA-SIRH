@@ -52,7 +52,9 @@ BEGIN
     RETURN (node->>'name') ~ '^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*$';
   ELSIF k = 'param' THEN
     -- Clé E4 dotée en minuscules : la VALEUR n'est jamais ici, seulement la clé.
-    RETURN (node->>'key') ~ '^[a-z0-9]+(\.[a-z0-9_]+)+$';
+    -- Le premier segment COMMENCE PAR UNE LETTRE : sans cela « 0.036 » serait une
+    -- clé recevable et un taux légal entrerait dans le moteur déguisé en clé.
+    RETURN (node->>'key') ~ '^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$';
   ELSIF k IN ('add', 'sub', 'mul', 'div', 'min', 'max') THEN
     RETURN payroll.node_is_safe(node->'a', false, depth + 1)
        AND payroll.node_is_safe(node->'b', false, depth + 1);
@@ -208,13 +210,13 @@ CREATE TABLE payroll.rubric_versions (
   -- Un taux vient d'un PARAMÈTRE E4 (clé) ou d'une valeur INTERNE assumée
   -- (prime d'entreprise) : jamais un taux légal écrit en dur.
   rate_value     numeric(12,6),
-  rate_param_key text CHECK (rate_param_key IS NULL OR rate_param_key ~ '^[a-z0-9]+(\.[a-z0-9_]+)+$'),
+  rate_param_key text CHECK (rate_param_key IS NULL OR rate_param_key ~ '^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$'),
   rate_base      text CHECK (rate_base IS NULL OR rate_base ~ '^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*$'),
   formula        jsonb,
   eligibility    jsonb,
   proration      text NOT NULL DEFAULT 'none' CHECK (proration IN ('none', 'worked_days', 'calendar_days')),
   cap_value      numeric(18,4),
-  cap_param_key  text CHECK (cap_param_key IS NULL OR cap_param_key ~ '^[a-z0-9]+(\.[a-z0-9_]+)+$'),
+  cap_param_key  text CHECK (cap_param_key IS NULL OR cap_param_key ~ '^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$'),
   floor_value    numeric(18,4),
   rounding_dp    int CHECK (rounding_dp IS NULL OR rounding_dp BETWEEN 0 AND 6),
   notes          text,
@@ -301,9 +303,9 @@ CREATE TABLE payroll.levy_versions (
   effective_from    date NOT NULL,
   -- UNIQUEMENT des clés E4 : le taux, le plafond et le plancher vivent au
   -- Config Center, datés, sourcés et contresignés — jamais ici.
-  rate_param_key    text NOT NULL CHECK (rate_param_key ~ '^[a-z0-9]+(\.[a-z0-9_]+)+$'),
-  ceiling_param_key text CHECK (ceiling_param_key IS NULL OR ceiling_param_key ~ '^[a-z0-9]+(\.[a-z0-9_]+)+$'),
-  floor_param_key   text CHECK (floor_param_key IS NULL OR floor_param_key ~ '^[a-z0-9]+(\.[a-z0-9_]+)+$'),
+  rate_param_key    text NOT NULL CHECK (rate_param_key ~ '^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$'),
+  ceiling_param_key text CHECK (ceiling_param_key IS NULL OR ceiling_param_key ~ '^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$'),
+  floor_param_key   text CHECK (floor_param_key IS NULL OR floor_param_key ~ '^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$'),
   exemption         jsonb,
   notes             text,
   created_by        uuid,
@@ -519,7 +521,12 @@ GRANT USAGE ON SCHEMA payroll TO kora_app;
 GRANT SELECT, INSERT, UPDATE ON payroll.pay_calendars     TO kora_app;
 GRANT SELECT, INSERT, UPDATE ON payroll.pay_periods       TO kora_app;  -- cycle contrôlé (garde)
 GRANT SELECT, INSERT, UPDATE ON payroll.salary_structures TO kora_app;
-GRANT SELECT, INSERT, DELETE ON payroll.structure_rubrics TO kora_app;  -- composition ajustable
+-- La composition d'une structure est ajustable : rattacher de nouveau une rubrique
+-- déjà présente en corrige le rang (ON CONFLICT … DO UPDATE SET sequence), ce qui
+-- exige UPDATE en plus de INSERT. Sans ce droit, le rattachement échoue en 42501
+-- (défaut relevé au run CI 31267337209). Les tables de RÉSULTAT, elles, restent
+-- sans UPDATE ni DELETE : c'est la composition qui évolue, jamais un calcul émis.
+GRANT SELECT, INSERT, UPDATE, DELETE ON payroll.structure_rubrics TO kora_app;
 GRANT SELECT, INSERT, UPDATE ON payroll.rubrics           TO kora_app;  -- nature figée dès usage (garde)
 GRANT SELECT, INSERT         ON payroll.rubric_versions   TO kora_app;  -- IMMUABLES
 GRANT SELECT, INSERT         ON payroll.compensations     TO kora_app;  -- HISTORISÉES

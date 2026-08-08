@@ -257,6 +257,9 @@ test('01 fixtures : organisation, présence CLÔTURÉE (E10), congés CLÔTURÉS
   const timePeriod = await created('/time/periods', adm, {
     scopeKind: 'tenant', label: `PY-SEPT-${RID}`, periodStart: '2026-09-01', periodEnd: '2026-09-30',
   });
+  // Cycle E10 : open → in_review → locked (le raccourci open → locked est
+  // refusé PAR LA BASE — run CI 31267337209).
+  await postJson(`/time/periods/${timePeriod}/status`, adm, { status: 'in_review' });
   await postJson(`/time/periods/${timePeriod}/status`, adm, { status: 'locked' });
   const tclose = await postJson<{ close: { id: string } }>(`/time/periods/${timePeriod}/close`, adm, { confirmWarnings: true }, 201);
   timeCloseId = tclose.close.id;
@@ -471,6 +474,13 @@ test('09 changement salarial FUTUR : aucun effet rétroactif sur la paie déjà 
   const sim = await postJson<SimulationOut>('/payroll/simulate', adm, { periodId: perSept, employeeId: e1 });
   assert.equal(sim.simulation.variables['base.montant'], 300000, 'septembre ignore l’augmentation de novembre');
   assert.equal(sim.simulation.gross, grossAvant);
+  // L'HISTORIQUE est consultable — et cette consultation de salaires est AUDITÉE.
+  const hist = await getJson<{ items: Array<{ effectiveFrom: string; baseAmount: string }> }>(
+    `/payroll/compensations?employeeId=${e1}`, adm);
+  assert.deepEqual(hist.items.map((c) => c.effectiveFrom), ['2026-11-01', '2025-01-01'],
+    'les deux versions coexistent, la plus récente en tête — rien n’a été réécrit');
+  assert.equal(num(`SELECT count(*) FROM audit.audit_log WHERE tenant_id = '${tenantAId}'
+    AND action = 'payroll_compensation_accessed'`), 1, 'consulter des salaires laisse une trace');
 });
 
 test('10 changement de PARAMÈTRE E4 : la nouvelle valeur ne s’applique qu’aux périodes qu’elle DATE', async () => {

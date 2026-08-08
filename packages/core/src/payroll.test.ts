@@ -51,6 +51,11 @@ test('grammaire : tout ce qui ressemble à du CODE est refusé', () => {
     { k: 'num', v: Number.POSITIVE_INFINITY },
     { k: 'var', name: '__proto__' },
     { k: 'param', key: 'PAIE.TAUX' },
+    // Un TAUX déguisé en clé : « 0.036 » a la forme d'une clé dotée. S'il passait,
+    // la règle « aucune valeur légale dans le moteur » se contournerait par la forme.
+    { k: 'param', key: '0.036' },
+    { k: 'param', key: '25000' },
+    { k: 'param', key: '1.5' },
     { k: 'round', a: { k: 'num', v: 1 }, dp: 99 },
     'chaîne', 42, null, [], { pas_de_k: true },
     { k: 'add', a: { k: 'num', v: 1 }, b: { k: 'call' } },

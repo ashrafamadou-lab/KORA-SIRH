@@ -28,6 +28,10 @@ BEGIN
     '{"k":"require","m":"fs"}'::jsonb,
     '{"k":"var","name":"__proto__"}'::jsonb,
     '{"k":"param","key":"PAIE.TAUX"}'::jsonb,
+    -- Un TAUX déguisé en clé : « 0.036 » ressemble à une clé dotée. La base le
+    -- refuse, sinon une valeur légale entrerait dans le moteur par la forme.
+    '{"k":"param","key":"0.036"}'::jsonb,
+    '{"k":"param","key":"25000"}'::jsonb,
     '{"k":"num","v":"douze"}'::jsonb,
     '{"k":"add","a":{"k":"num","v":1},"b":{"k":"call"}}'::jsonb,
     '"une chaîne"'::jsonb,
@@ -101,6 +105,32 @@ BEGIN
     RAISE EXCEPTION 'taux ambigu (valeur ET clé) accepté';
   EXCEPTION WHEN check_violation THEN NULL;
   END;
+  -- Un TAUX LÉGAL écrit en dur là où une clé E4 est attendue : refusé par la
+  -- colonne elle-même, pour la rubrique comme pour le prélèvement.
+  BEGIN
+    INSERT INTO payroll.rubric_versions (tenant_id, rubric_id, version, effective_from, valuation, rate_base, rate_param_key)
+    VALUES (t, current_setting('test.rub_a')::uuid, 96, '2027-04-01', 'rate', 'base.montant', '0.036');
+    RAISE EXCEPTION 'taux « 0.036 » accepté comme clé de paramètre';
+  EXCEPTION WHEN check_violation THEN NULL;
+  END;
+END $$;
+
+-- ---------- Prélèvement : la clé de taux est une CLÉ, jamais un nombre ----------
+DO $$
+DECLARE t uuid := current_setting('test.tenant_a')::uuid;
+        lv uuid;
+BEGIN
+  INSERT INTO payroll.levies (tenant_id, code, label_fr, label_en, kind, base_kind)
+  VALUES (t, 'CNSS-SAL', 'CNSS salariale', 'Employee contribution', 'salarial', 'cotisable')
+  RETURNING id INTO lv;
+  BEGIN
+    INSERT INTO payroll.levy_versions (tenant_id, levy_id, version, effective_from, rate_param_key)
+    VALUES (t, lv, 1, '2026-01-01', '0.036');
+    RAISE EXCEPTION 'prélèvement à taux EN DUR (0.036) accepté';
+  EXCEPTION WHEN check_violation THEN NULL;
+  END;
+  INSERT INTO payroll.levy_versions (tenant_id, levy_id, version, effective_from, rate_param_key, ceiling_param_key)
+  VALUES (t, lv, 1, '2026-01-01', 'cnss.taux.salarial', 'cnss.plafond.mensuel');
 END $$;
 
 -- ---------- Versions de rubriques et rémunérations : IMMUABLES ----------
@@ -324,6 +354,32 @@ BEGIN
     RAISE EXCEPTION 'RLS paie : des rémunérations visibles SANS contexte de tenant';
   END IF;
 END $$;
+
+-- ---------- Le rôle applicatif COMPOSE réellement une structure ----------
+-- Ce que le catalogue de droits autorise ne vaut rien tant que le chemin réel
+-- n'a pas été joué : rattacher une rubrique, puis la rattacher DE NOUVEAU pour
+-- corriger son rang, exactement comme le fait le service (ON CONFLICT … DO
+-- UPDATE). Le run CI 31267337209 avait un catalogue conforme et un rattachement
+-- qui échouait en 42501 : la couverture s'arrêtait à has_table_privilege.
+SET app.tenant_id = :'tenant_a';
+INSERT INTO payroll.structure_rubrics (tenant_id, structure_id, rubric_id, sequence)
+VALUES (:'tenant_a', :'str_a', :'rub_a', 10)
+ON CONFLICT (tenant_id, structure_id, rubric_id) DO UPDATE SET sequence = EXCLUDED.sequence;
+INSERT INTO payroll.structure_rubrics (tenant_id, structure_id, rubric_id, sequence)
+VALUES (:'tenant_a', :'str_a', :'rub_a', 20)
+ON CONFLICT (tenant_id, structure_id, rubric_id) DO UPDATE SET sequence = EXCLUDED.sequence;
+DO $$
+BEGIN
+  IF (SELECT count(*) FROM payroll.structure_rubrics) <> 1 THEN
+    RAISE EXCEPTION 'le second rattachement a dupliqué la composition';
+  END IF;
+  IF (SELECT sequence FROM payroll.structure_rubrics) <> 20 THEN
+    RAISE EXCEPTION 'le rang de la rubrique rattachée de nouveau n''a pas été corrigé';
+  END IF;
+END $$;
+-- Le détachement reste possible ; la composition n'est pas un résultat de paie.
+DELETE FROM payroll.structure_rubrics;
+SET app.tenant_id = '';
 
 -- ---------- Aucun DELETE applicatif sur les objets de paie ----------
 DO $$
