@@ -239,9 +239,18 @@ BEGIN
   END;
 END $$;
 
--- ---------- Anomalie résolue par APPLICATION D'ABSENCE : admise et bornée ----------
+-- ---------- Anomalie résolue par APPLICATION D'ABSENCE : admise et PROUVÉE ----------
+-- Le CATALOGUE (contrainte CHECK) ne suffit pas : c'est le GARDE qui exige la
+-- référence probante. Les deux sont vérifiés — élargir l'un sans l'autre laisse
+-- la résolution refusée à l'exécution (défaut constaté au run CI 31253534104).
 DO $$
 DECLARE t uuid := current_setting('test.tenant_a')::uuid;
+        e uuid := current_setting('test.emp_a')::uuid;
+        u uuid := current_setting('test.user_a')::uuid;
+        run_id uuid;
+        res_id uuid;
+        an_id uuid;
+        note text := 'expliquée par l''absence appliquée ' || current_setting('test.abs_a');
 BEGIN
   IF EXISTS (
     SELECT 1 FROM pg_constraint
@@ -251,6 +260,58 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'resolution_kind absence_applied absent de la contrainte';
   END IF;
+
+  INSERT INTO time.calc_runs (tenant_id, period_start, period_end, scope_kind, scope_employee_id, reason, engine_version)
+  VALUES (t, '2026-03-02', '2026-03-04', 'employee', e, 'fixture test 101', 'kora-presence-test')
+  RETURNING id INTO run_id;
+
+  -- 1. Journée SANS fait vivant (03/03 : aucun fait posé) ⇒ résolution REFUSÉE.
+  INSERT INTO time.day_results (tenant_id, employee_id, work_date, version, calc_run_id, engine_version, tz, day_status)
+  VALUES (t, e, '2026-03-04', 1, run_id, 'kora-presence-test', 'Africa/Porto-Novo', 'absent')
+  RETURNING id INTO res_id;
+  INSERT INTO time.day_anomalies (tenant_id, day_result_id, employee_id, work_date, code, severity)
+  VALUES (t, res_id, e, '2026-03-04', 'missing_out', 'warning') RETURNING id INTO an_id;
+  BEGIN
+    UPDATE time.day_anomalies
+       SET state = 'resolved', resolution_kind = 'absence_applied', state_note = note, state_by = u, state_at = now()
+     WHERE id = an_id;
+    RAISE EXCEPTION 'anomalie résolue SANS fait d''absence vivant';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM LIKE '%SANS fait%' THEN RAISE; END IF;
+  END;
+
+  -- 2. Journée COUVERTE par un fait vivant (02/03) ⇒ résolution ADMISE.
+  INSERT INTO time.day_results (tenant_id, employee_id, work_date, version, calc_run_id, engine_version, tz, day_status)
+  VALUES (t, e, '2026-03-02', 1, run_id, 'kora-presence-test', 'Africa/Porto-Novo', 'absent')
+  RETURNING id INTO res_id;
+  INSERT INTO time.day_anomalies (tenant_id, day_result_id, employee_id, work_date, code, severity)
+  VALUES (t, res_id, e, '2026-03-02', 'missing_out', 'warning') RETURNING id INTO an_id;
+  UPDATE time.day_anomalies
+     SET state = 'resolved', resolution_kind = 'absence_applied', state_note = note, state_by = u, state_at = now()
+   WHERE id = an_id;
+  IF (SELECT state || '|' || resolution_kind FROM time.day_anomalies WHERE id = an_id)
+     <> 'resolved|absence_applied' THEN
+    RAISE EXCEPTION 'résolution par absence appliquée non enregistrée';
+  END IF;
+
+  -- 3. Note VIDE ⇒ refus : la référence probante n'est jamais implicite.
+  INSERT INTO time.day_results (tenant_id, employee_id, work_date, version, calc_run_id, engine_version, tz, day_status)
+  VALUES (t, e, '2026-03-03', 1, run_id, 'kora-presence-test', 'Africa/Porto-Novo', 'absent')
+  RETURNING id INTO res_id;
+  INSERT INTO time.day_anomalies (tenant_id, day_result_id, employee_id, work_date, code, severity)
+  VALUES (t, res_id, e, '2026-03-03', 'missing_in', 'warning') RETURNING id INTO an_id;
+  INSERT INTO time.absence_facts (tenant_id, employee_id, work_date, absence_id, request_id, request_version,
+    absence_type_id, prep_category, type_code, paid, portion, counted, unit, created_by)
+  VALUES (t, e, '2026-03-03', current_setting('test.abs_a')::uuid, current_setting('test.req_a')::uuid, 1,
+          current_setting('test.type_a')::uuid, 'conge_paye', 'CAP', true, 'full', 1, 'open_days', u);
+  BEGIN
+    UPDATE time.day_anomalies
+       SET state = 'resolved', resolution_kind = 'absence_applied', state_note = '', state_by = u, state_at = now()
+     WHERE id = an_id;
+    RAISE EXCEPTION 'anomalie résolue sans note de référence';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM LIKE '%sans note de référence%' THEN RAISE; END IF;
+  END;
 END $$;
 
 -- ---------- Inter-tenant : un fait B ne référence JAMAIS l'absence du tenant A ----------

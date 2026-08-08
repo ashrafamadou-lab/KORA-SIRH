@@ -154,6 +154,58 @@ ALTER TABLE time.day_anomalies DROP CONSTRAINT day_anomalies_resolution_kind_che
 ALTER TABLE time.day_anomalies ADD CONSTRAINT day_anomalies_resolution_kind_check
   CHECK (resolution_kind IS NULL OR resolution_kind IN ('correction_applied', 'classified', 'absence_applied'));
 
+-- Le garde E10.3 n'admettait que DEUX formes de résolution probante (correction
+-- appliquée avec événement lié, classement motivé) : élargir la contrainte sans
+-- élargir le garde aurait laissé « absence_applied » refusé À L'EXÉCUTION. La
+-- troisième forme exige sa propre preuve, vérifiée PAR LA BASE : un fait
+-- d'absence VIVANT couvrant exactement cette journée pour ce salarié, plus une
+-- note d'état portant la référence (absence, demande, version). Sans fait
+-- vivant, la résolution est refusée — une absence annulée ne peut donc pas
+-- servir à solder une anomalie.
+CREATE OR REPLACE FUNCTION time.guard_anomaly_update() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF to_jsonb(NEW) - 'state' - 'state_note' - 'state_by' - 'state_at'
+       - 'assigned_to' - 'due_at' - 'resolution_kind' - 'resolution_event_id'
+     IS DISTINCT FROM
+     to_jsonb(OLD) - 'state' - 'state_note' - 'state_by' - 'state_at'
+       - 'assigned_to' - 'due_at' - 'resolution_kind' - 'resolution_event_id' THEN
+    RAISE EXCEPTION 'anomalie : seuls état, note, affectation, échéance et référence de résolution sont modifiables'
+      USING ERRCODE = 'raise_exception';
+  END IF;
+  IF NEW.state <> OLD.state THEN
+    IF NOT (
+      (OLD.state = 'open'         AND NEW.state IN ('acknowledged', 'dismissed', 'resolved')) OR
+      (OLD.state = 'acknowledged' AND NEW.state IN ('dismissed', 'open', 'resolved')) OR
+      (OLD.state = 'dismissed'    AND NEW.state = 'open') OR
+      (OLD.state = 'resolved'     AND NEW.state = 'open')
+    ) THEN
+      RAISE EXCEPTION 'transition d''état d''anomalie interdite : % -> %', OLD.state, NEW.state
+        USING ERRCODE = 'raise_exception';
+    END IF;
+  END IF;
+  IF NEW.state = 'resolved' THEN
+    IF NOT (
+      (NEW.resolution_kind = 'correction_applied' AND NEW.resolution_event_id IS NOT NULL) OR
+      (NEW.resolution_kind = 'classified' AND NEW.state_note IS NOT NULL AND char_length(NEW.state_note) > 0) OR
+      (NEW.resolution_kind = 'absence_applied'
+        AND NEW.state_note IS NOT NULL AND char_length(NEW.state_note) > 0
+        AND EXISTS (SELECT 1 FROM time.absence_facts f
+                     WHERE f.tenant_id = NEW.tenant_id AND f.employee_id = NEW.employee_id
+                       AND f.work_date = NEW.work_date AND f.status = 'active'))
+    ) THEN
+      RAISE EXCEPTION 'résolution sans référence probante interdite : correction appliquée (événement lié), classement motivé, ou absence appliquée (fait vivant du jour)'
+        USING ERRCODE = 'raise_exception';
+    END IF;
+  ELSE
+    -- Hors resolved, aucune référence de résolution ne subsiste (réouverture = purge).
+    IF NEW.resolution_kind IS NOT NULL OR NEW.resolution_event_id IS NOT NULL THEN
+      RAISE EXCEPTION 'référence de résolution réservée à l''état resolved' USING ERRCODE = 'raise_exception';
+    END IF;
+  END IF;
+  RETURN NEW;
+END $$;
+
 -- ---------------------------------------------------------------------------
 -- Périodes de CONGÉS : cycle contrôlé, réouverture versionnée, anti-chevauchement.
 -- ---------------------------------------------------------------------------
