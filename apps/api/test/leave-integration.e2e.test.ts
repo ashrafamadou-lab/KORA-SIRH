@@ -98,9 +98,10 @@ before(async () => {
     'leave.request_cancel_approved',
   ], true);
   await seedUser(tenantAId, self2Email, ['leave.request_self', 'leave.requests_view_own'], true);
-  const scopedId = await seedUser(tenantAId, scopedEmail, ['leave.reports_view'], false);
-  psql(`INSERT INTO admin.user_scopes (tenant_id, user_id, scope_type, scope_ref)
-        SELECT '${tenantAId}', '${scopedId}', 'department', NULL`); // portée posée au test 01 (unité connue)
+  // Rapporteur BORNÉ : aucune portée ici — la portée « department » exige une
+  // unité RÉELLE (garde admin.guard_user_scope_ref, run CI 30922863315) : elle
+  // est posée au test 01, dès que l'unité RH existe.
+  await seedUser(tenantAId, scopedEmail, ['leave.reports_view'], false);
   await seedUser(tenantAId, nakedEmail, ['employees.view'], true);
   await seedUser(tenantBId, bAdmEmail, [
     'leave.close_view', 'leave.close_run', 'leave.period_manage', 'leave.export_download', 'leave.reports_view',
@@ -193,8 +194,8 @@ test('01 fixtures : org, salariés, horaires jour/nuit, pointages BRUTS, droits,
   uRh = await created('/org/units', adm, { unitType: 'department', code: `LXRH-${RID}`, labelFr: 'RH', labelEn: 'HR', companyId: coA });
   uIt = await created('/org/units', adm, { unitType: 'department', code: `LXIT-${RID}`, labelFr: 'IT', labelEn: 'IT', companyId: coA });
   psql(`UPDATE org.units SET status = 'active' WHERE id IN ('${uRh}','${uIt}')`);
-  psql(`UPDATE admin.user_scopes SET scope_ref = '${uRh}'
-         WHERE user_id = (SELECT id FROM admin.users WHERE email = '${scopedEmail}') AND scope_type = 'department'`);
+  psql(`INSERT INTO admin.user_scopes (tenant_id, user_id, scope_type, scope_ref)
+        VALUES ('${tenantAId}', (SELECT id FROM admin.users WHERE email = '${scopedEmail}'), 'department', '${uRh}')`);
 
   const mk = async (mat: string, first: string, unit: string): Promise<string> => {
     const res = await api('/employees', adm, { matricule: mat, firstName: first, lastName: 'Integ', hireDate: '2025-01-01' });
@@ -454,7 +455,7 @@ test('09 RÉTROACTIF sur période E10 close : impact EN ATTENTE, réouverture E1
   assert.equal(still.activated, 0);
   assert.ok(still.stillPending >= 2);
   // Réouverture E10.3 RÉELLE : circuit temps_reouverture, motif, approbation.
-  await postJson(`/time/periods/${timePeriod}/reopen`, adm, { reason: 'absence rétroactive approuvée à intégrer' });
+  await postJson(`/time/periods/${timePeriod}/reopen`, adm, { motive: 'absence rétroactive approuvée à intégrer' });
   const reopenInstance = psql(`SELECT id FROM workflow.instances
     WHERE subject_type = 'time_period_reopen' AND subject_id = '${timePeriod}' ORDER BY created_at DESC LIMIT 1`);
   await postJson(`/workflow/instances/${reopenInstance}/approve`, rh, {});
@@ -474,12 +475,16 @@ test('09 RÉTROACTIF sur période E10 close : impact EN ATTENTE, réouverture E1
     periodStart: '2026-07-01', periodEnd: '2026-07-31', scopeKind: 'tenant', reason: 'reprise juillet avant re-clôture',
   }, 201);
   assert.match(julyCalc.run.status, /^completed/);
-  const preclose = await getJson<{ preclose: Record<string, unknown> }>(`/time/periods/${timePeriod}/preclose`, adm);
-  assert.ok(preclose.preclose, 'contrôle de pré-clôture disponible');
+  // Contrat E10.3 EXACT : { period, controls, blockers, warnings, closable } ; la
+  // clôture répond 201 (run CI 30922863315 : contrats relus un par un).
+  const preclose = await getJson<{ controls: unknown[]; blockers: number; closable: boolean }>(
+    `/time/periods/${timePeriod}/preclose`, adm);
+  assert.ok(preclose.controls.length > 0, 'contrôles de pré-clôture E10 disponibles');
+  assert.equal(preclose.blockers, 0, `re-clôture E10 sans bloquant : ${JSON.stringify(preclose.controls)}`);
   await postJson(`/time/periods/${timePeriod}/status`, adm, { status: 'locked' });
-  const reclose = await postJson<{ close: { closeNo?: number; datasetSha256?: string } }>(
-    `/time/periods/${timePeriod}/close`, adm, { confirmWarnings: true });
-  assert.ok(reclose.close, 're-clôture effectuée — nouvelle empreinte produite');
+  const reclose = await postJson<{ close: { closeNo: number; datasetSha256: string } }>(
+    `/time/periods/${timePeriod}/close`, adm, { confirmWarnings: true }, 201);
+  assert.match(reclose.close.datasetSha256, /^[0-9a-f]{64}$/, 're-clôture : NOUVELLE empreinte produite');
   assert.equal(psql(`SELECT count(*) FROM time.period_closes WHERE period_id = '${timePeriod}'`), '1',
     'clôture E10 de révision 2 (la période créée close par fixture n’en portait aucune)');
   void requestId;
@@ -520,11 +525,13 @@ test('10 clôture CONGÉS : contrôles exhaustifs, gel des lignes, empreinte SHA
   assert.equal(verify.match, true);
   assert.equal(verify.stored, fingerprint1);
   // Les lignes correspondent EXACTEMENT au ledger (solde de clôture = somme des mouvements).
-  const lineAvail = psql(`SELECT available FROM leave.close_lines
+  // Comparaison NUMÉRIQUE (le format texte d'un numeric non contraint diffère de
+  // celui d'un numeric(12,3) — la valeur, elle, doit être strictement la même).
+  const lineAvail = psql(`SELECT (available)::numeric(12,3)::text FROM leave.close_lines
     WHERE close_id = '${closeId1}' AND employee_id = '${e1}' AND absence_type_id = '${typeCap}'`);
-  const viewAvail = psql(`SELECT available FROM leave.balances_v
+  const viewAvail = psql(`SELECT (available)::numeric(12,3)::text FROM leave.balances_v
     WHERE employee_id = '${e1}' AND absence_type_id = '${typeCap}'`);
-  assert.equal(lineAvail, viewAvail);
+  assert.equal(lineAvail, viewAvail, 'la ligne figée est EXACTEMENT la somme du ledger');
   // Mouvement ordinaire RÉTROACTIF dans la période close : REFUSÉ PAR LA BASE.
   assert.equal(psqlFails(`INSERT INTO leave.entitlement_ledger (tenant_id, employee_id, absence_type_id,
       reference_period_start, reference_period_end, entry_kind, quantity, unit, effective_on, origin, idempotency_key)
@@ -556,12 +563,14 @@ test('12 RÉOUVERTURE congés versionnée : l’ancienne clôture DEMEURE, la re
     { reason: 'ajustement de septembre à passer' });
   await postJson(`/workflow/instances/${out.instanceId}/approve`, rh, {});
   assert.equal(psql(`SELECT status || '|' || revision FROM leave.periods WHERE id = '${leavePeriodSept}'`), 'reopened|2');
-  // Le mouvement passe MAINTENANT (période rouverte) — ajustement motivé E11.1.
-  const adj = await postJson<{ status: string }>('/leave/adjust', adm, {
-    employeeId: e1, typeId: typeCap, direction: 'credit', quantity: 1,
-    reason: 'reajustement apres reouverture', periodStart: '2026-01-01', periodEnd: '2026-12-31',
-  });
-  assert.equal(adj.status, 'applied', 'ajustement DIRECT (aucun seuil E4 configuré)');
+  // Le mouvement rétroactif REDEVIENT possible (miroir exact du refus prouvé au
+  // test 10) : la base seule décide, à la date d'effet. Date FIXE — un ajustement
+  // par l'API porterait CURRENT_DATE, donc un résultat dépendant du jour du run.
+  assert.equal(psqlFails(`INSERT INTO leave.entitlement_ledger (tenant_id, employee_id, absence_type_id,
+      reference_period_start, reference_period_end, entry_kind, quantity, unit, effective_on, origin, reason, idempotency_key)
+    VALUES ('${tenantAId}', '${e1}', '${typeCap}', '2026-01-01', '2026-12-31', 'adjustment_credit', 1,
+            'open_days', '2026-09-10', 'admin', 'regularisation apres reouverture', 'lx-reopen-${rid}')`), false,
+  'période ROUVERTE : le mouvement rétroactif redevient possible');
   const closed2 = await postJson<{ closeId: string; closeNo: number; fingerprint: string }>(
     `/leave/periods/${leavePeriodSept}/close`, adm, { confirmWarnings: true });
   closeId2 = closed2.closeId;

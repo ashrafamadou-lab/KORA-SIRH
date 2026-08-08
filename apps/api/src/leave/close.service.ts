@@ -22,7 +22,7 @@ import { NotificationService } from '../notify/notification.service';
 import { WorkflowService } from '../workflow/workflow.service';
 import { LeaveCatalogService } from './catalog.service';
 import {
-  DATE_RE, holdsPermission, scopeSetFor, paramsAt, type TimeOutcome,
+  DATE_RE, holdsPermission, pgCode, scopeSetFor, paramsAt, type TimeOutcome,
 } from './leave-access';
 import {
   LEAVE_CLOSE_ENGINE_VERSION, LEAVE_PREP_SCHEMA_VERSION, closeFingerprint, prepVariables,
@@ -82,8 +82,9 @@ export class LeaveCloseService {
         });
         return { kind: 'ok', id: rows[0]!.id };
       } catch (e) {
-        if ((e as Error).message.includes('leave_periods_no_overlap')
-          || /Code: `?23P01`?/.test((e as Error).message)) {
+        // Le CODE SQLSTATE est le seul contrat : le message d'une erreur brute
+        // Prisma vaut « N/A » en CI (leçon run 30818155276). 23P01 = exclusion.
+        if (pgCode(e) === '23P01' || (e as Error).message.includes('leave_periods_no_overlap')) {
           return { kind: 'conflict', reason: 'périodes de congés chevauchantes — la base refuse' };
         }
         throw e;

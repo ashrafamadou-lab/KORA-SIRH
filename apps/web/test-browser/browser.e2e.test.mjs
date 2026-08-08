@@ -1209,8 +1209,11 @@ test('CONGÉS (E11.3) : intégration présence VISIBLE, clôture à empreinte V�
   await shot(page, 'lc-integration', async () => {
     await login(page, lcAdmEmail);
     // 1. Intégration présence : compteurs réels de la fenêtre de septembre.
+    // Chaque attente de navigation vise un texte PROPRE à la page cible : toutes
+    // ces pages portent deux champs de dates dans un formulaire, un sélecteur
+    // structurel serait donc satisfait par la page PRÉCÉDENTE (run 30922863315).
     await page.click('a[href="#/leave/integration"]');
-    await page.waitForFunction(() => document.querySelectorAll('input[type="date"]').length >= 2);
+    await page.waitForFunction(() => (document.body.textContent ?? '').includes('Une absence appliquée produit des faits'));
     await page.locator('input[type="date"]').nth(0).fill('2026-09-01');
     await page.locator('input[type="date"]').nth(1).fill('2026-09-30');
     await page.click('button:has-text("Rechercher")');
@@ -1228,7 +1231,7 @@ test('CONGÉS (E11.3) : intégration présence VISIBLE, clôture à empreinte V�
   await shot(page, 'lc-close', async () => {
     // 2. Période de congés créée puis CLOSE via l'interface (avertissements confirmés).
     await page.click('a[href="#/leave/periods"]');
-    await page.waitForFunction(() => document.querySelectorAll('form input[type="date"]').length >= 2);
+    await page.waitForFunction(() => (document.body.textContent ?? '').includes('Périodes & clôture des congés'));
     await page.fill('form input:not([type="date"])', `Septembre congés ${rid}`);
     await page.locator('form input[type="date"]').nth(0).fill('2026-09-01');
     await page.locator('form input[type="date"]').nth(1).fill('2026-09-30');
@@ -1273,13 +1276,19 @@ test('CONGÉS (E11.3) : intégration présence VISIBLE, clôture à empreinte V�
   await shot(page, 'lc-reports', async () => {
     // 4. Rapports agrégés : catégories, entonnoir — jamais un motif.
     await page.click('a[href="#/leave/reports"]');
-    await page.waitForFunction(() => document.querySelectorAll('input[type="date"]').length >= 2);
+    await page.waitForFunction(() => (document.body.textContent ?? '')
+      .includes('Agrégats bornés à vos portées réelles'));
     await page.locator('input[type="date"]').nth(0).fill('2026-01-01');
     await page.locator('input[type="date"]').nth(1).fill('2026-09-30');
     await page.click('button:has-text("Rechercher")');
-    await page.waitForFunction(() => (document.body.textContent ?? '').includes('Soldes agrégés'));
+    // La page se monte APRÈS un premier chargement à sa plage par DÉFAUT (année
+    // en cours → aujourd'hui) : « Soldes agrégés » y figure déjà. Attendre ce
+    // titre lirait donc le rendu PRÉCÉDENT (run CI 30922863315). L'attente porte
+    // sur un marqueur que SEULE la plage filtrée produit — l'entonnoir, qui
+    // n'existe qu'avec des demandes dans la fenêtre demandée.
+    await page.waitForFunction(() => (document.body.textContent ?? '').includes('Entonnoir des demandes'));
     const b4 = await page.evaluate(() => document.body.textContent ?? '');
-    assert.ok(b4.includes('Entonnoir des demandes'), 'entonnoir des demandes visible');
+    assert.ok(b4.includes('Soldes agrégés'), 'soldes agrégés visibles');
     assert.ok(b4.includes('Absences par catégorie'), 'catégories préparatoires visibles');
   });
 
