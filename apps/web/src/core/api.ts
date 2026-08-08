@@ -215,6 +215,32 @@ export const API_CONTRACT = {
   leaveIntegration: { method: 'get', path: '/leave/integration' },
   leaveIntegrationRun: { method: 'post', path: '/leave/integration/run' },
   leaveReports: { method: 'get', path: '/leave/reports' },
+  // Paie brute (E12.1)
+  payrollCalendars: { method: 'get', path: '/payroll/calendars' },
+  payrollCalendarCreate: { method: 'post', path: '/payroll/calendars' },
+  payrollPeriods: { method: 'get', path: '/payroll/periods' },
+  payrollPeriodCreate: { method: 'post', path: '/payroll/periods' },
+  payrollPeriodStatus: { method: 'post', path: '/payroll/periods/{id}/status' },
+  payrollPeriodReopen: { method: 'post', path: '/payroll/periods/{id}/reopen' },
+  payrollPeriodRuns: { method: 'get', path: '/payroll/periods/{id}/runs' },
+  payrollPeriodResults: { method: 'get', path: '/payroll/periods/{id}/results' },
+  payrollStructures: { method: 'get', path: '/payroll/structures' },
+  payrollStructureCreate: { method: 'post', path: '/payroll/structures' },
+  payrollStructureStatus: { method: 'post', path: '/payroll/structures/{id}/status' },
+  payrollStructureRubric: { method: 'post', path: '/payroll/structures/{id}/rubrics' },
+  payrollRubrics: { method: 'get', path: '/payroll/rubrics' },
+  payrollRubricCreate: { method: 'post', path: '/payroll/rubrics' },
+  payrollRubricStatus: { method: 'post', path: '/payroll/rubrics/{id}/status' },
+  payrollRubricVersionAdd: { method: 'post', path: '/payroll/rubrics/{id}/versions' },
+  payrollCompensations: { method: 'get', path: '/payroll/compensations' },
+  payrollCompensationAdd: { method: 'post', path: '/payroll/compensations' },
+  payrollLevies: { method: 'get', path: '/payroll/levies' },
+  payrollLevyCreate: { method: 'post', path: '/payroll/levies' },
+  payrollLevyVersionAdd: { method: 'post', path: '/payroll/levies/{id}/versions' },
+  payrollSimulate: { method: 'post', path: '/payroll/simulate' },
+  payrollRun: { method: 'post', path: '/payroll/runs' },
+  payrollResult: { method: 'get', path: '/payroll/results/{id}' },
+  payrollResultCompare: { method: 'get', path: '/payroll/results/{id}/compare' },
 } as const;
 
 export type ContractKey = keyof typeof API_CONTRACT;
@@ -603,6 +629,75 @@ export interface LeaveIntegrationOut {
     pending: Array<{ absenceId: string; employeeId: string; matricule: string; from: string; to: string; days: number }>;
   };
 }
+// --- Paie brute (E12.1) ---
+export interface PayrollPeriodRow {
+  id: string; label: string; periodStart: string; periodEnd: string; payDate: string;
+  status: string; revision: number; calendarCode: string; runCount: number; currentResults: number;
+}
+export interface PayrollTraceStep { step: number; op: string; detail: string; value: number }
+export interface PayrollParamUsed { value: number; parameterId: string; effectiveFrom: string | null; source: string | null }
+export interface PayrollLine {
+  sequence?: number; code: string; labelFr: string; labelEn: string; kind: string;
+  taxable: boolean; cotisable: boolean; valuation: string;
+  base: number | string | null; rate: number | string | null; quantity: number | string | null;
+  amount: number | string; trace: PayrollTraceStep[];
+  inputsUsed: Record<string, number>; paramsUsed: Record<string, PayrollParamUsed>;
+}
+export interface PayrollSimulationOut {
+  simulation: {
+    periodLabel: string; periodStart: string; periodEnd: string; payDate: string;
+    employeeId: string; currency: string; engineVersion: string; roundingDp: number;
+    timeCloseId: string | null; leaveCloseId: string | null;
+    gross: number; taxableBase: number; contributableBase: number;
+    lines: PayrollLine[];
+    skipped: Array<{ code: string; reason: string }>;
+    errors: Array<{ code: string; reason: string }>;
+    variables: Record<string, number>;
+    paramsUsed: Record<string, PayrollParamUsed>;
+    inputsSha256: string; persisted: boolean; note: string;
+  };
+}
+export interface PayrollResultRow {
+  id: string; employeeId: string; matricule: string; firstName: string; lastName: string;
+  version: number; isCurrent: boolean; currency: string; grossAmount: string;
+  taxableBase: string; contributableBase: string; linesCount: number;
+  inputsSha256: string; engineVersion: string; computedAt: string; runId: string;
+}
+export interface PayrollResultDetailOut {
+  result: {
+    id: string; periodLabel: string; periodStart: string; periodEnd: string; payDate: string;
+    matricule: string; version: number; isCurrent: boolean; currency: string;
+    grossAmount: string; taxableBase: string; contributableBase: string; inputsSha256: string;
+    engineVersion: string; timeCloseId: string | null; leaveCloseId: string | null;
+    paramsUsed: Record<string, PayrollParamUsed>; inputsUsed: Record<string, number>;
+    computedAt: string; lines: PayrollLine[];
+  };
+}
+export interface PayrollComparisonOut {
+  comparison: {
+    from: { id: string; version: number; gross: number; inputsSha256: string };
+    to: { id: string; version: number; gross: number; inputsSha256: string };
+    grossDelta: number; sameInputs: boolean;
+    differences: Array<{ code: string; before: number | null; after: number | null; delta: number; change: string }>;
+  };
+}
+export interface PayrollRubricRow {
+  id: string; code: string; labelFr: string; labelEn: string; kind: string;
+  taxable: boolean; cotisable: boolean; sequence: number; status: string; used: boolean;
+  versions: Array<{
+    id: string; version: number; effectiveFrom: string; valuation: string;
+    fixedValue: string | null; rateValue: string | null; rateParamKey: string | null;
+    rateBase: string | null; formula: unknown; eligibility: unknown; proration: string;
+    capValue: string | null; capParamKey: string | null; floorValue: string | null; roundingDp: number | null;
+  }>;
+}
+export interface PayrollRunRow {
+  id: string; periodRevision: number; scopeKind: string; reason: string; status: string;
+  engineVersion: string; employeesCount: number; resultsCount: number;
+  errors: Array<{ employeeId: string; reason: string }>; fingerprint: string | null;
+  timeCloseId: string | null; leaveCloseId: string | null; startedAt: string; finishedAt: string | null;
+}
+
 export interface LeaveReportOut {
   report: {
     from: string; to: string;

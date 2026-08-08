@@ -67,6 +67,8 @@ const lrMgrEmail = `pwa.lrmgr.${rid}@demo.bj`;
 const lrRhEmail = `pwa.lrrh.${rid}@demo.bj`;
 // E11.3 — identité DÉDIÉE clôture congés / intégration présence / rapports.
 const lcAdmEmail = `pwa.lcadm.${rid}@demo.bj`;
+// E12.1 — identité DÉDIÉE paie brute.
+const payAdmEmail = `pwa.payadm.${rid}@demo.bj`;
 
 let app = null;
 let webServer = null;
@@ -197,6 +199,9 @@ before(async (tc) => {
   const lrEssUserId = await seedUser(lrEssEmail, ['leave.request_self', 'leave.requests_view_own', 'leave.balance_view_own']);
   await seedUser(lcAdmEmail, ['leave.period_manage', 'leave.close_run', 'leave.close_view', 'leave.reopen',
     'leave.export_create', 'leave.export_download', 'leave.reports_view', 'leave.integration_run']);
+  await seedUser(payAdmEmail, ['payroll.calendar_manage', 'payroll.structures_manage', 'payroll.rubrics_manage',
+    'payroll.compensation_view', 'payroll.compensation_manage', 'payroll.simulate', 'payroll.run',
+    'payroll.results_view', 'payroll.levies_manage']);
   const lrMgrUserId = await seedUser(lrMgrEmail, ['leave.requests_view_team', 'workflow.view', 'workflow.act']);
   const lrRhRole = psql(`INSERT INTO admin.roles (tenant_id, key, name) VALUES ('${tenantId}','pw-rh-conges','RH congés PW') RETURNING id`);
   const lrRhUserId = psql(`INSERT INTO admin.users (tenant_id, email, password_hash) VALUES ('${tenantId}','${lrRhEmail}', (SELECT password_hash FROM admin.users WHERE email = '${lrEssEmail}')) RETURNING id`);
@@ -1341,6 +1346,170 @@ test('CONGÉS (E11.3) : RBAC — sans permission, ni menus de clôture, ni API (
     assert.equal(statuses.integration, 403, 'intégration : 403');
     assert.equal(statuses.reports, 403, 'rapports : 403');
     assert.ok([400, 403].includes(statuses.run), `reprise refusée (CSRF/permission), jamais 2xx : ${statuses.run}`);
+  });
+  await ctx.close();
+});
+
+test('PAIE (E12.1) : calcul BRUT depuis l’interface, explication ligne par ligne, versions — HORS LIGNE rien ne survit', { skip: !RUNNABLE }, async () => {
+  const apiBase = `http://127.0.0.1:${API_PORT}/api/v1`;
+  // Nom DISTINCT de la fonction login(page, …) du module : sinon la constante
+  // masquerait la fonction et la connexion par l'interface échouerait.
+  const loginRes = await fetch(`${apiBase}/auth/login`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ tenantSlug: slug, email: payAdmEmail, password: P }),
+  });
+  const { token } = await loginRes.json();
+  const call = async (method, path, body) => {
+    const r = await fetch(`${apiBase}${path}`, {
+      method, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const text = await r.text();
+    return { status: r.status, body: text ? JSON.parse(text) : {} };
+  };
+
+  // Le paramètre E4 d'ARRONDI conditionne tout calcul : sans lui, rien ne sort.
+  psql(`INSERT INTO compliance.legal_parameters
+          (tenant_id, country_code, key, value, effective_from, status, is_legal_sensitive,
+           confidence, source_text, verified_by, verified_at)
+        VALUES ('${tenantId}','BJ','paie.arrondi.decimales','0','2020-01-01','active',true,
+                'verified','fixture navigateur E12.1','fixture-pw','2026-01-01')`);
+  psql(`INSERT INTO compliance.legal_parameters
+          (tenant_id, country_code, key, value, effective_from, status, is_legal_sensitive,
+           confidence, source_text, verified_by, verified_at)
+        VALUES ('${tenantId}','BJ','paie.prime.anciennete','0.05','2020-01-01','active',true,
+                'verified','fixture navigateur E12.1','fixture-pw','2026-01-01')`);
+
+  const cal = await call('POST', '/payroll/calendars', { code: 'MENS', labelFr: 'Mensuel', labelEn: 'Monthly', frequency: 'monthly' });
+  assert.equal(cal.status, 201, JSON.stringify(cal.body));
+  const per = await call('POST', '/payroll/periods', {
+    calendarId: cal.body.id, label: 'Paie septembre 2026',
+    periodStart: '2026-09-01', periodEnd: '2026-09-30', payDate: '2026-09-30',
+  });
+  assert.equal(per.status, 201, JSON.stringify(per.body));
+  const str = await call('POST', '/payroll/structures', { code: 'CADRE', labelFr: 'Cadre', labelEn: 'Staff' });
+  assert.equal((await call('POST', `/payroll/structures/${str.body.id}/status`, { status: 'active' })).status, 200);
+  const mkRubric = async (code, kind, taxable, cotisable, sequence, version) => {
+    const r = await call('POST', '/payroll/rubrics', { code, labelFr: code, labelEn: code, kind, taxable, cotisable, sequence });
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    assert.equal((await call('POST', `/payroll/rubrics/${r.body.id}/versions`, { effectiveFrom: '2025-01-01', ...version })).status, 201);
+    assert.equal((await call('POST', `/payroll/rubrics/${r.body.id}/status`, { status: 'active' })).status, 200);
+    assert.equal((await call('POST', `/payroll/structures/${str.body.id}/rubrics`, { rubricId: r.body.id, sequence })).status, 200);
+    return r.body.id;
+  };
+  await mkRubric('BASE', 'gain', true, true, 10, { valuation: 'rate', rateBase: 'base.montant', rateValue: 1 });
+  await mkRubric('ANC', 'prime', true, true, 20, {
+    valuation: 'formula',
+    formula: {
+      k: 'if', cond: { k: 'gte', a: { k: 'var', name: 'emp.anciennete_mois' }, b: { k: 'num', v: 12 } },
+      then: { k: 'mul', a: { k: 'var', name: 'base.montant' }, b: { k: 'param', key: 'paie.prime.anciennete' } },
+      else: { k: 'num', v: 0 },
+    },
+  });
+  // Une formule HORS GRAMMAIRE est refusée : aucune exécution arbitraire.
+  const hostile = await call('POST', `/payroll/rubrics/${(await call('POST', '/payroll/rubrics',
+    { code: 'HOSTILE', labelFr: 'H', labelEn: 'H', kind: 'prime', taxable: true, cotisable: true })).body.id}/versions`,
+  { effectiveFrom: '2025-01-01', valuation: 'formula', formula: { k: 'call', fn: 'process.exit' } });
+  assert.equal(hostile.status, 400, 'formule hostile refusée par l’API');
+
+  const comp = await call('POST', '/payroll/compensations', {
+    employeeId: hr.e3, structureId: str.body.id, effectiveFrom: '2025-01-01',
+    baseAmount: 300000, currency: 'XOF', periodicity: 'monthly', reason: 'embauche',
+  });
+  assert.equal(comp.status, 201, JSON.stringify(comp.body));
+
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await ctx.newPage();
+  await shot(page, 'pay-run', async () => {
+    await login(page, payAdmEmail);
+    // 1. Périodes : la date de paie et le cycle sont visibles ; le calcul se lance.
+    await page.click('a[href="#/payroll/periods"]');
+    await page.waitForFunction(() => (document.body.textContent ?? '').includes('La DATE DE PAIE date la résolution'));
+    const b1 = await page.evaluate(() => document.body.textContent ?? '');
+    assert.ok(b1.includes('Paie septembre 2026'), 'la période créée est listée');
+    assert.ok(b1.includes('2026-09-30'), 'la date de paie est affichée');
+  });
+
+  // Le calcul passe par l'API (l'écran utilise une invite navigateur pour le motif).
+  const run = await call('POST', '/payroll/runs', { periodId: per.body.id, reason: 'paie de septembre (navigateur)' });
+  assert.equal(run.status, 201, JSON.stringify(run.body));
+  assert.equal(run.body.status, 'completed');
+  assert.match(run.body.fingerprint, /^[0-9a-f]{64}$/);
+
+  await shot(page, 'pay-results', async () => {
+    // 2. Résultats : version courante, brut, assiettes, empreinte.
+    await page.click('a[href="#/payroll/results"]');
+    await page.waitForFunction(() => (document.body.textContent ?? '').includes('Un résultat ne se modifie jamais'));
+    await page.waitForFunction(() => (document.body.textContent ?? '').includes('PW-0003'));
+    const b2 = await page.evaluate(() => document.body.textContent ?? '');
+    assert.ok(b2.includes('Courante'), 'la version courante est identifiée');
+    assert.ok(b2.includes('315000') || b2.includes('300000'), `brut affiché (reçu : ${b2.slice(0, 300)})`);
+    // 3. Détail EXPLIQUÉ : trace ligne par ligne, paramètre E4 avec sa date d'effet.
+    await page.click('tbody tr:first-child button:has-text("Détails")');
+    await page.waitForFunction(() => (document.body.textContent ?? '').includes('Empreinte des entrées'));
+    await page.locator('button:has-text("Expliquer")').first().click();
+    await page.waitForFunction(() => (document.body.textContent ?? '').includes('Explication du calcul'));
+    const b3 = await page.evaluate(() => document.body.textContent ?? '');
+    assert.ok(b3.includes('kora-payroll-gross-1.0.0'), 'la version du moteur est portée par le résultat');
+    assert.ok(b3.includes('Étape'), 'la trace est présentée étape par étape');
+  });
+
+  // Un recalcul crée une VERSION : l'ancienne demeure, une seule est courante.
+  assert.equal((await call('POST', '/payroll/runs', { periodId: per.body.id, reason: 'recalcul' })).status, 201);
+  assert.equal(psql(`SELECT count(*) FROM payroll.results
+    WHERE tenant_id = '${tenantId}' AND employee_id = '${hr.e3}'`), '2');
+  assert.equal(psql(`SELECT count(*) FROM payroll.results
+    WHERE tenant_id = '${tenantId}' AND employee_id = '${hr.e3}' AND is_current`), '1');
+
+  // 4. HORS LIGNE : aucune donnée de paie ne survit.
+  await shot(page, 'pay-offline', async () => {
+    await ctx.setOffline(true);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#app');
+    const report = await storageReport(page);
+    assert.deepEqual(report.cacheApiEntries, [], 'AUCUNE réponse /api en Cache Storage');
+    assert.ok(!report.bodyText.includes('PW-0003'), 'aucun matricule hors ligne');
+    assert.ok(!report.bodyText.includes('300000'), 'aucun montant de paie hors ligne');
+    const offline = await page.evaluate(async () => {
+      try {
+        const r = await fetch('/api/v1/payroll/periods');
+        return `status:${r.status}`;
+      } catch {
+        return 'network-error';
+      }
+    });
+    assert.equal(offline, 'network-error', 'la paie ne répond JAMAIS depuis un cache');
+    await ctx.setOffline(false);
+  });
+  await ctx.close();
+});
+
+test('PAIE (E12.1) : RBAC — sans permission, ni menus de paie, ni API (le serveur tranche)', { skip: !RUNNABLE }, async () => {
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await ctx.newPage();
+  await shot(page, 'pay-rbac', async () => {
+    await login(page, viewerEmail); // employees.view SEUL
+    for (const href of ['#/payroll/periods', '#/payroll/rubrics', '#/payroll/results']) {
+      const has = await page.evaluate((s) => document.querySelector(`a[href="${s}"]`) !== null, href);
+      assert.equal(has, false, `menu ${href} absent sans permission`);
+    }
+    await page.goto(`${BASE}/#/payroll/results`);
+    await page.waitForFunction(() =>
+      (document.body.textContent ?? '').includes('Accès refusé')
+      || (document.body.textContent ?? '').includes('Access denied'));
+    const statuses = await page.evaluate(async () => ({
+      periods: (await fetch('/api/v1/payroll/periods')).status,
+      rubrics: (await fetch('/api/v1/payroll/rubrics')).status,
+      compensations: (await fetch('/api/v1/payroll/compensations')).status,
+      simulate: (await fetch('/api/v1/payroll/simulate', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ periodId: '00000000-0000-4000-8000-000000000001', employeeId: '00000000-0000-4000-8000-000000000002' }),
+      })).status,
+    }));
+    assert.equal(statuses.periods, 403, 'périodes de paie : 403');
+    assert.equal(statuses.rubrics, 403, 'rubriques : 403');
+    assert.equal(statuses.compensations, 403, 'salaires : 403');
+    assert.ok([400, 403].includes(statuses.simulate), `simulation refusée : ${statuses.simulate}`);
   });
   await ctx.close();
 });

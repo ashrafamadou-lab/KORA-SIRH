@@ -82,6 +82,14 @@ export const NAV_MAP: NavSection[] = [
     ],
   },
   {
+    labelKey: 'nav.payroll',
+    items: [
+      { route: '/payroll/periods', labelKey: 'nav.payrollPeriods', anyOf: ['payroll.calendar_manage', 'payroll.run', 'payroll.results_view'], icon: 'calendar' },
+      { route: '/payroll/rubrics', labelKey: 'nav.payrollRubrics', anyOf: ['payroll.rubrics_manage', 'payroll.structures_manage'], icon: 'sliders' },
+      { route: '/payroll/results', labelKey: 'nav.payrollResults', anyOf: ['payroll.results_view', 'payroll.simulate', 'payroll.run'], icon: 'layers' },
+    ],
+  },
+  {
     labelKey: 'nav.admin',
     items: [
       { route: '/admin/users', labelKey: 'nav.adminUsers', anyOf: ['users.view'], icon: 'shield' },

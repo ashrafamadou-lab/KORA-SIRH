@@ -42,6 +42,9 @@ import {
 import {
   leaveClosePage, leaveIntegrationPage, leaveReportsPage,
 } from './pages/leave-close.ts';
+import {
+  payrollPeriodsPage, payrollResultsPage, payrollRubricsPage,
+} from './pages/payroll.ts';
 import { states, stateForError } from './ui/kit.ts';
 
 const appRoot = document.getElementById('app')!;
@@ -115,6 +118,10 @@ const routes: RouteDef[] = [
   { pattern: '/leave/integration', render: () => leaveIntegrationPage(session), anyOf: ['leave.integration_run', 'leave.close_run', 'leave.close_view', 'leave.requests_admin'] },
   { pattern: '/leave/periods', render: () => leaveClosePage(session), anyOf: ['leave.period_manage', 'leave.close_run', 'leave.close_view', 'leave.reopen'] },
   { pattern: '/leave/reports', render: () => leaveReportsPage(session), anyOf: ['leave.reports_view'] },
+  // Paie brute (E12.1).
+  { pattern: '/payroll/periods', render: () => payrollPeriodsPage(session), anyOf: ['payroll.calendar_manage', 'payroll.run', 'payroll.results_view'] },
+  { pattern: '/payroll/rubrics', render: () => payrollRubricsPage(session), anyOf: ['payroll.rubrics_manage', 'payroll.structures_manage', 'payroll.results_view'] },
+  { pattern: '/payroll/results', render: () => payrollResultsPage(session), anyOf: ['payroll.results_view', 'payroll.simulate', 'payroll.run'] },
 ];
 
 const CRUMB_BY_PREFIX: Array<[string, () => ReturnType<typeof crumbsOf>]> = [
@@ -154,6 +161,9 @@ const CRUMB_BY_PREFIX: Array<[string, () => ReturnType<typeof crumbsOf>]> = [
   ['/leave/integration', () => crumbsOf(['nav.dashboard', '/'], ['nav.leave', '/leave/mine'], ['nav.leaveIntegration', null])],
   ['/leave/periods', () => crumbsOf(['nav.dashboard', '/'], ['nav.leave', '/leave/mine'], ['nav.leavePeriods', null])],
   ['/leave/reports', () => crumbsOf(['nav.dashboard', '/'], ['nav.leave', '/leave/mine'], ['nav.leaveReports', null])],
+  ['/payroll/periods', () => crumbsOf(['nav.dashboard', '/'], ['nav.payroll', '/payroll/periods'], ['nav.payrollPeriods', null])],
+  ['/payroll/rubrics', () => crumbsOf(['nav.dashboard', '/'], ['nav.payroll', '/payroll/periods'], ['nav.payrollRubrics', null])],
+  ['/payroll/results', () => crumbsOf(['nav.dashboard', '/'], ['nav.payroll', '/payroll/periods'], ['nav.payrollResults', null])],
   ['/admin', () => crumbsOf(['nav.dashboard', '/'], ['nav.adminUsers', null])],
   ['/config', () => crumbsOf(['nav.dashboard', '/'], ['nav.config', null])],
   ['/audit', () => crumbsOf(['nav.dashboard', '/'], ['nav.audit', null])],

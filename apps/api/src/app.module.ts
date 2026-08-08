@@ -11,10 +11,11 @@ import { AuditModule } from './audit/audit.module';
 import { OrgModule } from './org/org.module';
 import { TimeModule } from './time/time.module';
 import { LeaveModule } from './leave/leave.module';
+import { PayrollModule } from './payroll/payroll.module';
 import { OpenapiController } from './openapi/openapi.controller';
 
 @Module({
-  imports: [PrismaModule, AuthModule, HrModule, AdminModule, WorkflowModule, ConfigModule, NotifyModule, AuditModule, OrgModule, TimeModule, LeaveModule],
+  imports: [PrismaModule, AuthModule, HrModule, AdminModule, WorkflowModule, ConfigModule, NotifyModule, AuditModule, OrgModule, TimeModule, LeaveModule, PayrollModule],
   controllers: [HealthController, OpenapiController],
 })
 export class AppModule {}

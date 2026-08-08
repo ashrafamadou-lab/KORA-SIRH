@@ -1905,6 +1905,168 @@ export const OPENAPI_SPEC = {
         responses: { '200': { description: '{ report }' } },
       },
     },
+    // ------------------------- Paie brute (E12.1) -------------------------
+    '/payroll/calendars': {
+      post: {
+        summary: 'Créer un calendrier de paie (payroll.calendar_manage)',
+        security: bearer,
+        responses: { '201': { description: '{ id }' }, '409': err('Code déjà utilisé') },
+      },
+      get: { summary: 'Calendriers de paie', security: bearer, responses: { '200': { description: '{ items }' } } },
+    },
+    '/payroll/periods': {
+      post: {
+        summary: 'Créer une période de paie — bornes IMMUABLES, anti-chevauchement par EXCLUSION ; la DATE DE PAIE date la résolution E4',
+        security: bearer,
+        responses: { '201': { description: '{ id }' }, '409': err('Périodes chevauchantes') },
+      },
+      get: { summary: 'Périodes de paie et leur cycle', security: bearer, responses: { '200': { description: '{ items }' } } },
+    },
+    '/payroll/periods/{id}/status': {
+      post: {
+        summary: 'Cycle de la période : open → locked → validated (la validation exige un résultat courant pour chaque salarié rémunéré)',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ status }' }, '409': err('Transition refusée ou salariés sans résultat') },
+      },
+    },
+    '/payroll/periods/{id}/reopen': {
+      post: {
+        summary: 'Demander la réouverture d’une paie VALIDÉE — circuit E3 « paie_periode_reouverture », révision +1, l’histoire demeure',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ instanceId }' }, '409': err('Aucun circuit actif / période non validée') },
+      },
+    },
+    '/payroll/periods/{id}/runs': {
+      get: {
+        summary: 'Historique des exécutions de paie d’une période (empreintes, clôtures consommées, erreurs)',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ items }' } },
+      },
+    },
+    '/payroll/periods/{id}/results': {
+      get: {
+        summary: 'Résultats de paie d’une période : toutes les VERSIONS, la courante identifiée',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ items }' } },
+      },
+    },
+    '/payroll/structures': {
+      post: { summary: 'Créer une structure salariale', security: bearer, responses: { '201': { description: '{ id }' } } },
+      get: { summary: 'Structures salariales et leur composition', security: bearer, responses: { '200': { description: '{ items }' } } },
+    },
+    '/payroll/structures/{id}/status': {
+      post: {
+        summary: 'Activer / retirer une structure salariale',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ updated }' } },
+      },
+    },
+    '/payroll/structures/{id}/rubrics': {
+      post: {
+        summary: 'Rattacher une rubrique à une structure (ordre d’application)',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ attached }' } },
+      },
+    },
+    '/payroll/rubrics': {
+      post: {
+        summary: 'Créer une rubrique (gain, prime, indemnité, avantage, retenue) — imposable et cotisable EXPLICITES, figés dès le premier calcul',
+        security: bearer,
+        responses: { '201': { description: '{ id }' }, '409': err('Code déjà utilisé') },
+      },
+      get: { summary: 'Rubriques et leurs versions datées', security: bearer, responses: { '200': { description: '{ items }' } } },
+    },
+    '/payroll/rubrics/{id}/status': {
+      post: {
+        summary: 'Activer / retirer une rubrique (l’activation exige au moins une version datée)',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ updated }' }, '409': err('Aucune version') },
+      },
+    },
+    '/payroll/rubrics/{id}/versions': {
+      post: {
+        summary: 'Ajouter une version DATÉE et IMMUABLE : montant fixe, taux (clé E4 ou valeur interne), ou FORMULE à grammaire FERMÉE — aucune exécution arbitraire, aucune valeur légale en dur',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: {
+          '201': { description: '{ id, version }' },
+          '400': err('Formule hors grammaire, variable hors catalogue ou taux ambigu'),
+          '409': err('Date d’effet déjà prise'),
+        },
+      },
+    },
+    '/payroll/compensations': {
+      post: {
+        summary: 'Enregistrer une version DATÉE de rémunération — jamais une réécriture ; un changement futur ne touche aucune paie calculée',
+        security: bearer,
+        responses: { '201': { description: '{ id }' }, '409': err('Date d’effet déjà prise') },
+      },
+      get: {
+        summary: 'Rémunération historisée (payroll.compensation_view) — consultation AUDITÉE',
+        security: bearer,
+        parameters: [{ name: 'employeeId', in: 'query', required: false, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ items }' }, '403': err('Permission absente') },
+      },
+    },
+    '/payroll/levies': {
+      post: {
+        summary: 'Déclarer un prélèvement (CNSS, ITS, VPS…) — E12.1 NE LE CALCULE PAS : interface paramétrique et versionnée',
+        security: bearer,
+        responses: { '201': { description: '{ id }' } },
+      },
+      get: { summary: 'Prélèvements déclarés et leurs versions', security: bearer, responses: { '200': { description: '{ items, note }' } } },
+    },
+    '/payroll/levies/{id}/versions': {
+      post: {
+        summary: 'Version d’un prélèvement : UNIQUEMENT des CLÉS E4 (taux, plafond, plancher) — un taux écrit en dur est refusé',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '201': { description: '{ id, version }' }, '400': err('Clé E4 attendue') },
+      },
+    },
+    '/payroll/simulate': {
+      post: {
+        summary: 'SIMULER un brut : lignes expliquées, variables des clôtures E10/E11, paramètres E4 avec provenance — AUCUNE écriture de paie',
+        security: bearer,
+        responses: { '200': { description: '{ simulation }' }, '400': err('Paramètre E4 non résolu à la date de paie') },
+      },
+    },
+    '/payroll/runs': {
+      post: {
+        summary: 'Exécuter le calcul brut : résultats VERSIONNÉS, empreinte d’entrées, sérialisation par verrou — un recalcul crée une version, jamais une retouche',
+        security: bearer,
+        responses: {
+          '201': { description: '{ runId, status, employeesCount, resultsCount, errors, fingerprint }' },
+          '409': err('Paie validée — réouverture contrôlée requise'),
+        },
+      },
+    },
+    '/payroll/results/{id}': {
+      get: {
+        summary: 'Détail EXPLIQUÉ d’un résultat : chaque montant, sa rubrique, sa version, sa trace d’évaluation, ses entrées et ses paramètres',
+        security: bearer,
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: '{ result }' } },
+      },
+    },
+    '/payroll/results/{id}/compare': {
+      get: {
+        summary: 'Comparer DEUX calculs du même salarié : écart de brut et différences ligne par ligne',
+        security: bearer,
+        parameters: [
+          { name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+          { name: 'with', in: 'query', required: true, schema: { type: 'string', format: 'uuid' } },
+        ],
+        responses: { '200': { description: '{ comparison }' }, '400': err('Salariés différents') },
+      },
+    },
     '/openapi.json': {
       get: { summary: 'Cette spécification', responses: { '200': { description: 'OpenAPI 3.0.3' } } },
     },
