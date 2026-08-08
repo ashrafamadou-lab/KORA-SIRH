@@ -323,6 +323,11 @@ export async function payrollResultsPage(session: Session): Promise<HTMLElement>
   const canSimulate = session.hasPermission('payroll.simulate');
   const zone = h('div', {});
   const detail = h('div', {});
+  // L'explication d'une ligne s'AJOUTE au résultat, elle ne le remplace pas :
+  // sans ce bloc dédié, demander « pourquoi ce montant ? » effaçait la version,
+  // le moteur, l'empreinte, les clôtures et les paramètres qui la justifient
+  // (défaut relevé au run CI 31268510665).
+  const traceBox = h('div', {});
 
   let periods: PayrollPeriodRow[] = [];
   try {
@@ -346,7 +351,7 @@ export async function payrollResultsPage(session: Session): Promise<HTMLElement>
   root.appendChild(detail);
 
   function explain(line: PayrollLine): void {
-    detail.replaceChildren(h('div', { class: 'glass card' }, traceTable(line)));
+    traceBox.replaceChildren(h('div', { class: 'glass card' }, traceTable(line)));
   }
 
   async function simulate(): Promise<void> {
@@ -381,10 +386,13 @@ export async function payrollResultsPage(session: Session): Promise<HTMLElement>
           `${t('pay.errors')} : ${s.errors.map((x) => `${x.code} — ${x.reason}`).join(' · ')}`));
       }
       zone.replaceChildren(card);
+      traceBox.replaceChildren();
+      detail.replaceChildren(traceBox);
     } catch (e) { zone.replaceChildren(stateForError(e as ApiError)); }
   }
 
   async function openResult(id: string, others: PayrollResultRow[]): Promise<void> {
+    traceBox.replaceChildren();
     detail.replaceChildren(states.loading());
     try {
       const out = await session.api.call<PayrollResultDetailOut>('payrollResult', { params: { id } });
@@ -415,7 +423,7 @@ export async function payrollResultsPage(session: Session): Promise<HTMLElement>
         card.appendChild(h('div', { class: 'filters' }, sel.wrap,
           button(t('pay.compare'), () => void compare(id, sel.select.value), { variant: 'ghost' })));
       }
-      detail.replaceChildren(card);
+      detail.replaceChildren(card, traceBox);
     } catch (e) { detail.replaceChildren(stateForError(e as ApiError)); }
   }
 

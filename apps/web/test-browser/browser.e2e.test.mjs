@@ -1452,6 +1452,9 @@ test('PAIE (E12.1) : calcul BRUT depuis l’interface, explication ligne par lig
     const b3 = await page.evaluate(() => document.body.textContent ?? '');
     assert.ok(b3.includes('kora-payroll-gross-1.0.0'), 'la version du moteur est portée par le résultat');
     assert.ok(b3.includes('Étape'), 'la trace est présentée étape par étape');
+    // Expliquer une ligne AJOUTE l'explication — le résultat qui la justifie
+    // (empreinte, clôtures, paramètres) reste sous les yeux (run CI 31268510665).
+    assert.ok(b3.includes('Empreinte des entrées'), 'l’explication n’efface pas le résultat expliqué');
   });
 
   // Un recalcul crée une VERSION : l'ancienne demeure, une seule est courante.

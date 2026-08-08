@@ -485,7 +485,13 @@ test('09 changement salarial FUTUR : aucun effet rétroactif sur la paie déjà 
 
 test('10 changement de PARAMÈTRE E4 : la nouvelle valeur ne s’applique qu’aux périodes qu’elle DATE', async () => {
   const adm = await token(slugA, admEmail);
-  // Le taux de prime d'ancienneté passe à 8 % au 1er décembre 2026.
+  // Le taux de prime d'ancienneté passe à 8 % au 1er décembre 2026. E4 refuse
+  // deux versions chevauchantes d'une même clé (exclusion « parameter_no_overlap ») :
+  // la version en vigueur se FERME à la date d'effet de la suivante — exactement
+  // ce que fait l'activation d'un paramètre (config.service) ; son contenu n'est
+  // jamais réécrit (run CI 31268510665).
+  psql(`UPDATE compliance.legal_parameters SET effective_to = '2026-12-01'
+         WHERE tenant_id = '${tenantAId}' AND key = 'paie.prime.anciennete' AND effective_to IS NULL`);
   psql(`INSERT INTO compliance.legal_parameters
           (tenant_id, country_code, key, value, effective_from, status, is_legal_sensitive,
            confidence, source_text, verified_by, verified_at)
