@@ -259,7 +259,9 @@ test('01 fixtures : org, salariés, horaires jour/nuit, pointages BRUTS, droits,
   });
   await postJson(`/leave/policies/${polCap}/versions`, adm, {
     effectiveFrom: '2025-01-01', accrualMode: 'monthly', accrualRateParam: 'conges.acquisition.taux_mensuel',
-    referencePeriod: 'calendar_year', rounding: 'half_up_0_5',
+    // Bloc minimal 0,5 j : c'est la POLITIQUE qui autorise la demi-journée (sans
+    // elle, « half_day_not_allowed » bloque la soumission — run 31252610808).
+    referencePeriod: 'calendar_year', rounding: 'half_up_0_5', minBlock: 0.5,
   }, 201);
   await postJson(`/leave/policies/${polCap}/status`, adm, { status: 'active' });
   for (const [ty, code] of [[typeHor, 'POL-HOR'], [typeMal, 'POL-MAL']] as const) {
@@ -414,7 +416,8 @@ test('08 ANNULATION d’une absence appliquée : faits SUPERSÉDÉS motivés, re
     { reason: 'annulation septembre' });
   await postJson(`/workflow/instances/${out.instanceId}/approve`, rh, {});
   assert.equal(factCount(`absence_id = '${absSept}' AND status = 'superseded'`), 3, 'faits SUPERSÉDÉS, jamais supprimés');
-  assert.equal(psql(`SELECT supersede_reason IS NOT NULL FROM time.absence_facts
+  // psql rend un booléen NU « t » ; seul le cast explicite donne « true ».
+  assert.equal(psql(`SELECT (supersede_reason IS NOT NULL)::text FROM time.absence_facts
     WHERE absence_id = '${absSept}' LIMIT 1`), 'true', 'supersession MOTIVÉE');
   assert.equal(psql(`SELECT presence_impact FROM leave.absences WHERE id = '${absSept}'`), 'superseded');
   // Reprise d'intégration : le recalcul retire la qualification sur une NOUVELLE version.
@@ -422,7 +425,7 @@ test('08 ANNULATION d’une absence appliquée : faits SUPERSÉDÉS motivés, re
     from: '2026-09-07', to: '2026-09-13',
   });
   assert.ok(integ.recalculated >= 1, 'recalcul de retrait effectué');
-  assert.equal(psql(`SELECT justified_category IS NULL FROM time.day_results
+  assert.equal(psql(`SELECT (justified_category IS NULL)::text FROM time.day_results
     WHERE employee_id = '${e1}' AND work_date = '2026-09-09' AND is_current`), 'true', 'qualification retirée');
   assert.ok(Number(psql(`SELECT count(*) FROM time.day_results
     WHERE employee_id = '${e1}' AND work_date = '2026-09-09'`)) >= 3, 'toutes les versions DEMEURENT');
